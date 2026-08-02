@@ -261,10 +261,12 @@ class GhCliGateway:
                 cwd=self.root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="strict",
                 timeout=30,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
             raise GitHubError("GitHub CLI execution failed") from exc
         if result.returncode != 0:
             raise GitHubError("GitHub CLI returned an error; sensitive details were suppressed")

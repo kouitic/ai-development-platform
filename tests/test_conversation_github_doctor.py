@@ -69,6 +69,28 @@ def test_gh_gateway_suppresses_command_error(
         gateway.add_comment(1, "body")
 
 
+def test_gh_gateway_reads_japanese_json_as_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    options: dict[str, object] = {}
+
+    def succeeded(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        options.update(kwargs)
+        stdout = (
+            '{"number":1,"title":"限定受入","body":"日本語の要件",'
+            '"labels":[],"url":"https://example.invalid/issues/1"}'
+        )
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", succeeded)
+    issue = GhCliGateway(tmp_path).get_issue(1)
+
+    assert issue.title == "限定受入"
+    assert issue.body == "日本語の要件"
+    assert options["encoding"] == "utf-8"
+    assert options["errors"] == "strict"
+
+
 def test_doctor_never_reports_environment_values(
     initialized_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
