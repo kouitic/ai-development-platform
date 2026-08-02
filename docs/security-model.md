@@ -38,7 +38,7 @@ Claudeを伴う正式品質ゲートは、repository visibility、event type/act
 
 ## 外部Actionの固定方針
 
-開発中は公式ActionのMajor version tagを使用できる。Operational受入前には、全外部Actionをレビュー済みのfull commit SHAへ固定することを必須条件とする。更新はDependabotまたは変更内容と新SHAを明示した専用PRで行い、通常の機能変更に混在させない。現在のMajor tag利用は開発段階のためであり、Operational受入済みを意味しない。
+全外部ActionはNode.js 24対応のレビュー済みfull commit SHAへ固定する。採用release、SHA、互換性確認は`github-actions-pinning.md`へ記録する。更新はDependabotまたは変更内容と新SHAを明示した独立変更で行い、通常の機能変更に混在させない。version tag、branch、`latest`参照へ戻してはならない。
 
 ## Secret scanの役割分離
 

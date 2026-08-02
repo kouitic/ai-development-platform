@@ -59,7 +59,7 @@ Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と�
 | 8 | Findingを種別ごとに追跡・解決確認 | origin/status/evidence/reopen/SHA再評価試験済み | 未実施 | ローカル完了・外部未受入 |
 | 9 | 未実装ToolをAgent設定に置かない | validateとClaude拒否試験済み | SDK限定受入未実施 | ローカル完了・外部未受入 |
 | 10 | GitHub安全条件を環境変数だけに依存しない | payload/private/fork/branch/workflow試験済み | 実event未受入 | ローカル完了・外部未受入 |
-| 11 | クリーンな正式ソースZIP | 生成時・CI用内容検査実装済み | Actions未実施 | ローカル完了・外部未受入 |
+| 11 | クリーンな正式ソースZIP | 生成時・CI用内容検査実装済み | Actions run `30746868976`で3.12/3.13生成・検証成功 | 完了 |
 | 12 | Mock E2Eで変更から再検証まで再現 | Verification→commit→PR→rework→再Verification確認済み | 対象外 | Mock完了 |
 | 13 | 実Claude＋実GitHubで変更後テスト成功 | 手順・コードあり | 未実施 | **未完了** |
 
@@ -67,8 +67,8 @@ Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と�
 
 - `ruff format --check .`: 成功（85 files）
 - `ruff check .`: 成功
-- strict `mypy`: 成功（49 source files）
-- `pytest`: 156 passed、1 skipped、coverage 80.52%（基準80%）
+- strict `mypy`: 成功（50 source files）
+- `pytest`: 174 passed、1 skipped、coverage 80.26%（基準80%）
 - skipはWindowsで実symlink作成権限がないケース。解決済み実体パスが保護対象へ向く回避試験は非skipで成功
 - `ai-dev validate`: 成功
 - JSON 22件・YAML 34件: parse成功。うちroot/templateのGitHub Actions YAMLは6件
@@ -77,7 +77,7 @@ Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と�
 - `pip-audit`: 既知脆弱性0件。ローカルパッケージ自身はPyPI非公開のため監査対象外
 - `pip-licenses`: dev＋Claude optionalを含む90パッケージを確認。リポジトリ自身の未選択ライセンス以外に追加判断が必要な結果なし
 - 内蔵Secret/Data scan: 検出0件
-- ローカルPython 3.13.14で全テスト成功。Python 3.12のローカル実行および3.12/3.13 matrixの成功判定はGitHub Actions受入後に行う
+- ローカルPython 3.13.14で全テスト成功。Actions run `30746868976`のPython 3.12/3.13 matrixも成功
 
 ## Mockで確認した範囲
 
@@ -85,7 +85,7 @@ Issue取得、branch、設計・実装Context、Agent自己申告と分離した
 
 ## 実外部接続で確認した範囲
 
-なし。実GitHub Issue/branch/commit/push/PR/comment/Check、GitHub Actions、Claude Agent SDK tool callback/sandboxは未受入である。
+GitHub Actions CIはcommit `c7f368c`のrun `30746868976`で3.12/3.13とも成功した。実GitHub Issue/branch/commit/push/PR/comment/Checkと、Claude Agent SDK tool callback/sandboxは未受入である。
 
 ## 完成済みのfoundation
 

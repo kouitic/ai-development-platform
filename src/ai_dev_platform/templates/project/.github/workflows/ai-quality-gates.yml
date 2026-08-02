@@ -18,12 +18,12 @@ jobs:
   ordered-quality-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1、Node.js 24対応
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0、Node.js 24対応
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0、Node.js 24対応
         with:
           python-version: "3.12"
       - name: Install
@@ -35,7 +35,7 @@ jobs:
       - name: Inspect formal source submission
         run: uv run ai-dev verify-source-package --archive .ai-dev/local/submission.zip
       - name: Secret history scan
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0、Node.js 24対応
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve linked Issue
@@ -61,7 +61,7 @@ jobs:
           --artifact-directory .ai-dev/local/quality-artifacts
       - name: Upload sanitized quality evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1、Node.js 24対応
         with:
           name: ai-quality-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: .ai-dev/local/quality-artifacts/

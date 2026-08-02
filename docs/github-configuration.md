@@ -21,6 +21,8 @@ Repository settingsで、Pull Request必須、required status checks、conversat
 
 標準は`contents: read`です。手動の開発WorkflowだけIssueブランチのcommit/pushに`contents: write`を付与し、Issueはread、PRはwriteに限定します。正式レビューは`contents: read`、`issues: read`、`pull-requests: write`、`checks: write`とします。GitHub Environment、本番Secret、本番IAMはどちらにも渡しません。
 
+外部Actionはversion tagではなく、`github-actions-pinning.md`でレビューしたNode.js 24対応commit SHAへ固定します。rootと生成テンプレートは同じSHAを使用し、Action更新だけを独立して検証します。
+
 ## ラベル
 
 `.ai-dev`の状態と対応する`ai:*`、`risk:*`、`type:*`、`impact:*`ラベルを作成します。`ai:approved`は手動開発Workflowの必須条件ですが、単独では承認にならず、要件と環境構成のダイジェスト一致も必要です。

@@ -30,7 +30,7 @@ Secretや個人情報を含まない小さな変更IssueをIssue Formで作り�
 5. 許可外ファイル、`.env`読取り、shell、main push、force push、外部送信が拒否されることを確認する。拒否ログに入力値を残さない。
 6. Claudeによる変更後にLocalVerificationRunnerがpytest、ruff、mypy、Secret scan、依存脆弱性検査、プロジェクト必須検査を実行し、PASS後だけcommit、push、PRがこの順で作成されることを履歴で確認する。開発WorkflowはPR作成後に停止し、System Review以降がPR Workflowだけで起動することも確認する。Verification run ID、worktree digest、基準SHA、commit SHAを記録する。
 7. 通常CIのPython 3.12/3.13 matrixがMock-only frozen install、import、pytest、ruff、mypy、Source Package検査に成功し、Claude extraのimport確認にも成功することを確認する。
-8. Operational受入対象Workflowの全外部Actionがレビュー済みfull commit SHAへ固定されていることを確認する。
+8. `github-actions-pinning.md`とWorkflowを照合し、全外部ActionがNode.js 24対応のレビュー済みfull commit SHAへ固定され、version tagが残っていないことを確認する。
 9. system reviewへIssue本文、受入条件、PR diff、変更ファイル、検査集計が渡ることを、安全な参照IDで確認する。
 10. major FindingでCheckがfailureとなり、Finding ID付きで実装へ戻ることを確認する。
 11. 修正後の再レビューPASSまでFindingが未解決一覧から消えないことを確認する。

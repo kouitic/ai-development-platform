@@ -6,10 +6,10 @@
 |---|---|---|---|
 | R3-1 | Review `run_id`冪等保存とQA Context重複排除 | 実装・回帰試験済み | 実Actions未受入 |
 | R3-2 | `RequirementItem`、構造化Issue、要件承認待ち、完全Traceability | 実装・Mock試験済み | 実Issue未受入 |
-| R3-3 | Claude SDK optional extra、Mock-only frozen install | 実装・SDKなしローカル試験済み | clean外部Runner未受入 |
-| R3-4 | Python `>=3.12,<3.14`、3.12/3.13 CI matrix | 定義・YAML試験済み | Python 3.13 Actions未実施 |
-| R3-5 | ZIP入れ子拒否、scanner対象最適化、gitleaks役割分離 | 実装・ローカル試験済み | Actions Artifact/gitleaks未受入 |
-| R3-6 | 外部Action固定方針 | Operational受入前のfull SHA固定を文書化 | full SHA固定・更新PR運用未受入 |
+| R3-3 | Claude SDK optional extra、Mock-only frozen install | 実装・SDKなしローカル試験済み | Actions run `30746868976`で3.12/3.13成功 |
+| R3-4 | Python `>=3.12,<3.14`、3.12/3.13 CI matrix | 定義・YAML試験済み | Actions run `30746868976`で両版成功 |
+| R3-5 | ZIP入れ子拒否、scanner対象最適化、gitleaks役割分離 | 実装・ローカル試験済み | Artifact生成・検証・gitleaks成功 |
+| R3-6 | 外部Action固定方針 | Node.js 24対応release、input、署名をレビューしfull SHA固定 | 更新後Actionsで再確認予定 |
 
 指摘ごとの原因、影響、変更対象、試験、完了条件は`docs/third-review-analysis.md`に固定した。
 
