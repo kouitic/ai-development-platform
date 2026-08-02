@@ -16,6 +16,12 @@ GitHub Actionsで実行する外部Actionを、Node.js 24対応のレビュー�
 
 各SHAについて、公式リポジトリ内の安定版releaseとの一致、`action.yml`のNode.js 24指定、使用中inputの存在、GitHubのcommit署名検証`verified: true / reason: valid`を確認した。
 
+## 実行確認
+
+commit `3555559`のGitHub Actions run [`30748749625`](https://github.com/kouitic/ai-development-platform/actions/runs/30748749625)で、Python 3.12・3.13の全工程が成功した。Node.js 20廃止予定警告は解消し、`setup-python`を`setup-uv`より先に実行してPython版ごとにキャッシュキーを分離したことで、キャッシュ予約競合の注記も解消した。
+
+両jobでformat、lint、mypy、pytest、Secret scan、依存関係監査、Source Package生成・検証、Claude SDK importが成功し、Python 3.12 jobでは正式ZIP Artifactのuploadも成功した。
+
 公式release：
 
 - [actions/checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1)

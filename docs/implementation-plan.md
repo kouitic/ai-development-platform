@@ -9,7 +9,7 @@
 | R3-3 | Claude SDK optional extra、Mock-only frozen install | 実装・SDKなしローカル試験済み | Actions run `30746868976`で3.12/3.13成功 |
 | R3-4 | Python `>=3.12,<3.14`、3.12/3.13 CI matrix | 定義・YAML試験済み | Actions run `30746868976`で両版成功 |
 | R3-5 | ZIP入れ子拒否、scanner対象最適化、gitleaks役割分離 | 実装・ローカル試験済み | Artifact生成・検証・gitleaks成功 |
-| R3-6 | 外部Action固定方針 | Node.js 24対応release、input、署名をレビューしfull SHA固定 | 更新後Actionsで再確認予定 |
+| R3-6 | 外部Action固定方針 | Node.js 24対応release、input、署名をレビューしfull SHA固定 | commit `3555559`のActions run `30748749625`で3.12/3.13成功 |
 
 指摘ごとの原因、影響、変更対象、試験、完了条件は`docs/third-review-analysis.md`に固定した。
 

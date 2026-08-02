@@ -45,6 +45,10 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 
 Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と一致することを要求し、pytestのrepository配下temp directoryを誤って有効なpackage rootとして扱わない。ローカル自動テストは実装済みだが、実Claude・実GitHub受入は受入repository準備後に実施する。
 
+## 外部ActionのNode.js 24移行
+
+rootと生成テンプレートの全Workflowで、外部ActionをNode.js 24対応のレビュー済みfull commit SHAへ固定した。commit `3555559`のActions run [`30748749625`](https://github.com/kouitic/ai-development-platform/actions/runs/30748749625)でPython 3.12・3.13の全工程が成功し、Node.js 20廃止予定警告とuvキャッシュ予約競合の注記がないことを確認した。
+
 ## Operational MVP 13条件
 
 | # | 条件 | ローカル実装・Mock証拠 | 実外部受入 | 判定 |
@@ -85,7 +89,7 @@ Issue取得、branch、設計・実装Context、Agent自己申告と分離した
 
 ## 実外部接続で確認した範囲
 
-GitHub Actions CIはcommit `c7f368c`のrun `30746868976`で3.12/3.13とも成功した。実GitHub Issue/branch/commit/push/PR/comment/Checkと、Claude Agent SDK tool callback/sandboxは未受入である。
+GitHub Actions CIはcommit `c7f368c`のrun `30746868976`で3.12/3.13とも成功した。さらに、Node.js 24対応Actionへ移行したcommit `3555559`のrun [`30748749625`](https://github.com/kouitic/ai-development-platform/actions/runs/30748749625)でも両版の全工程が成功した。実GitHub Issue/branch/commit/push/PR/comment/Checkと、Claude Agent SDK tool callback/sandboxは未受入である。
 
 ## 完成済みのfoundation
 
