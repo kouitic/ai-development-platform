@@ -19,12 +19,12 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 | 1 | System Review二重登録解消 | `run_id`冪等保存・QA重複排除試験済み | Actions未実施 | ローカル完了・外部未受入 |
 | 2 | 実要件ID単位のTraceability | `RequirementItem`と構造化Issue parser試験済み | 実Issue未実施 | ローカル完了・外部未受入 |
 | 3 | QAが全必須要件を確認 | 実装・受入条件別test・review参照の完全性試験済み | 実QA未実施 | ローカル完了・外部未受入 |
-| 4 | Claude SDKなしMock CI | SDKを除去したfrozen環境でimport/validate/doctor/test/package成功 | clean Actions未実施 | ローカル完了・外部未受入 |
-| 5 | Python対応版明示 | `>=3.12,<3.14`、CI matrix 3.12/3.13 | 3.13実行未実施 | 定義完了・外部未受入 |
-| 6 | Python 3.12/3.13 CI成功 | Workflow定義・YAML試験済み | Actions未実施 | **未完了** |
-| 7 | 正式Source ZIPクリーン化 | 過去ZIPを含む禁止物拒否・反復生成試験済み | Artifact未実施 | ローカル完了・外部未受入 |
-| 8 | Secret scan最適化 | tree除外・明示追跡ファイル検出・ZIP非展開試験済み | gitleaks未実施 | ローカル完了・外部未受入 |
-| 9 | 全追加テスト成功 | ローカル回帰実施 | 3.13未実施 | ローカル完了・外部未受入 |
+| 4 | Claude SDKなしMock CI | SDKを除去したfrozen環境でimport/validate/doctor/test/package成功 | Actions run `30746868976`の3.12/3.13で成功 | 完了 |
+| 5 | Python対応版明示 | `>=3.12,<3.14`、CI matrix 3.12/3.13 | Actions run `30746868976`で両版実行成功 | 完了 |
+| 6 | Python 3.12/3.13 CI成功 | Workflow定義・YAML試験済み | commit `c7f368c`のActions run `30746868976`で両job成功 | 完了 |
+| 7 | 正式Source ZIPクリーン化 | 過去ZIPを含む禁止物拒否・反復生成試験済み | 3.12 jobで生成・検証・Artifact upload成功 | 完了 |
+| 8 | Secret scan最適化 | tree除外・明示追跡ファイル検出・ZIP非展開試験済み | 両jobのgitleaks成功 | 完了 |
+| 9 | 全追加テスト成功 | ローカル172件成功、1件skip、coverage 80.26% | 3.12/3.13両job成功 | 完了 |
 | 10 | README・MVP報告更新 | 更新済み | 文書外部レビュー未実施 | ローカル完了・外部未受入 |
 
 ## 第4回レビュー対応の実装状態
