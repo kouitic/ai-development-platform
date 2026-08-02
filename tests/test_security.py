@@ -34,6 +34,14 @@ from ai_dev_platform.security.scanner import (
             "database_url_with_credentials",
         ),
     ],
+    ids=(
+        "anthropic-api-key",
+        "github-token",
+        "aws-access-key",
+        "private-key",
+        "password-value",
+        "database-url-with-credentials",
+    ),
 )
 def test_secret_patterns_are_detected_without_storing_value(value: str, category: str) -> None:
     findings = scan_text(value)
