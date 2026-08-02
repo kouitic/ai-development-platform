@@ -15,7 +15,14 @@ ai-dev run --issue <number>
 
 Linux/macOSでも同じ`ai-dev`コマンドを利用できます。
 
-Issue Formの構造化YAMLも、要件digestと一致する正式な人間のGitHub承認コメントがあるまで要件候補です。自然言語からAIが生成した候補と同様に`REQUIREMENTS_APPROVAL_REQUIRED`で停止し、`approve --stage requirements`による人間承認後だけ利用します。Issue変更でdigestが変われば再承認が必要です。その後、デプロイ・環境構成の人間回答待ちで停止します。mainへのマージ、本番デプロイ、本番データ変更はAIが自動実行しません。Secretと本番相当データをGitへ追加しないでください。
+Issue Formの構造化要件と12件の`deployment_answers`は、対応する二つのダイジェスト付き人間承認コメントと`ai:approved`が揃うまで候補です。Issue変更でdigestが変われば再承認が必要です。
+
+```powershell
+ai-dev issue-approval-template --issue <number>
+ai-dev issue-preflight --issue <number>
+```
+
+実Claude開発では`.ai-dev/project.yaml`の`github.enabled`と`github.gateway: gh`を設定し、`github.allowed_actors`へ手動実行を許可する人間を列挙します。mainの`AI開発オーケストレーター`へ承認済みIssue番号を入力すると、Claude開発、ホスト検証、Issueブランチへのcommit/push、PR作成まで進んで停止します。PR後のSystem Review、Business Review、QAは独立した`ai-quality-gates.yml`が担当します。mainへのマージ、本番デプロイ、本番データ変更はAIが自動実行しません。Secretと本番相当データをGitへ追加しないでください。
 
 AI変更後のテスト、lint、型検査、依存監査、Secret scanは`.ai-dev/policies/verification.yaml`に従ってホスト側が実行します。pytest JUnitから取得した実行済みPASS test caseだけを受入条件の証拠にでき、Verification全体のPASSやAgentの自己申告だけでは要件充足にもcommitにも使いません。正式なPR品質ゲートは`.github/workflows/ai-quality-gates.yml`でCI→System→Business→QAの順に実行します。
 

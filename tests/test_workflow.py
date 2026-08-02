@@ -160,6 +160,20 @@ def test_normal_flow_reaches_human_approval(initialized_project: Path) -> None:
     assert transitions[-1]["details"]["to"] == "HUMAN_APPROVAL_REQUIRED"
 
 
+def test_development_run_stops_after_pr_for_independent_quality_workflow(
+    initialized_project: Path,
+) -> None:
+    runner, _, task, provider = setup_runner(initialized_project, issue=93)
+    runner.stop_after_pull_request = True
+
+    finished = asyncio.run(runner.run(task.task_id))
+
+    assert finished.state == WorkflowState.PAUSED
+    assert finished.resume_state == WorkflowState.SYSTEM_REVIEW
+    assert finished.pull_request_number == 1
+    assert len(provider.requests) == 4
+
+
 def test_ai_requirement_candidates_wait_for_formal_human_approval(
     initialized_project: Path,
 ) -> None:

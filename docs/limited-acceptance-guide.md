@@ -14,21 +14,21 @@ Operational MVPを完成と判断する前に、機密情報や本番相当デ�
 2. mainへの直接pushとforce pushを禁止する。
 3. CODEOWNERS、required review、`ai-quality/system-review`、`ai-quality/business-review`、`ai-quality/qa-assessment`、`ai-quality/final`を必須にする。
 4. Secret scanningとPush protectionを有効化する。
-5. Actions tokenを`contents: read/write`、`issues: write`、`pull-requests: write`、`checks: write`の必要工程に限定する。
+5. 開発Workflowは`contents: write`、`issues: read`、`pull-requests: write`、レビューWorkflowは`contents: read`、`issues: read`、`pull-requests: write`、`checks: write`に限定する。
 6. `ANTHROPIC_API_KEY`をGitHub Secretへ登録し、値をIssue、ログ、Artifactへ出さない。
 
 ## 合成受入ケース
 
-Secretや個人情報を含まない小さな変更IssueをIssue Formで作り、構造化YAMLの要件ID、種別、説明、受入条件、必須性、対象範囲、対象外を明記する。AI生成候補を使う場合は`requirements`工程の人間承認記録を残す。PR本文からIssueを`Closes #<number>`で関連付ける。最初のsystem reviewでmajor Findingが出る決定的な欠陥を含め、修正後にPASSできるケースを使う。
+Secretや個人情報を含まない小さな変更IssueをIssue Formで作り、構造化YAMLの要件ID、種別、説明、受入条件、必須性、対象範囲、対象外と、12件の`deployment_answers`を明記する。`issue-approval-template`が表示した要件・環境構成のコメントを人間が確認して投稿し、`ai:approved`を付与する。PR本文からIssueを`Closes #<number>`で関連付ける。最初のsystem reviewでmajor Findingが出る決定的な欠陥を含め、修正後にPASSできるケースを使う。
 
 ## 実行手順
 
 1. `ai-dev doctor`と`ai-dev validate`を実行し、未確認の外部設定を人間が照合する。
-2. `AI_DEV_GITHUB_GATEWAY=gh`でIssue取得とIssue branch作成を確認する。
-3. 12件の環境質問へ回答し、GitHub comment IDを伴う承認後だけ設計へ進むことを確認する。
-4. `.ai-dev/project.yaml`で実GitHubを明示設定し、`AI_DEV_PROVIDER=claude`を統合Actionsから選択する。安全判定は`GITHUB_EVENT_PATH`のPrivate・非fork PR payloadから導出され、自己申告フラグだけでは起動しないことを確認する。
+2. `.ai-dev/project.yaml`で`github.enabled: true`、`github.gateway: gh`、実行を許可する人間の`github.allowed_actors`を設定する。
+3. `ai-dev issue-approval-template --issue <番号>`の二つのコメントを人間が投稿し、`ai:approved`付与後に`issue-preflight`が成功することを確認する。Issue本文変更と後続の却下で失敗へ戻ることも確認する。
+4. Actions画面からmainの`AI開発オーケストレーター`を手動実行する。安全判定は`workflow_dispatch` payloadのPrivate repository、入力Issue、sender、default branchと、`GITHUB_REF`、`GITHUB_WORKFLOW_REF`、`GITHUB_SHA`の一致から導出され、自己申告フラグでは起動できないことを確認する。
 5. 許可外ファイル、`.env`読取り、shell、main push、force push、外部送信が拒否されることを確認する。拒否ログに入力値を残さない。
-6. Claudeによる変更後にLocalVerificationRunnerがpytest、ruff、mypy、Secret scan、依存脆弱性検査、プロジェクト必須検査を実行し、PASS後だけcommit、push、PRがこの順で作成されることを履歴で確認する。Verification run ID、worktree digest、基準SHA、commit SHAを記録する。
+6. Claudeによる変更後にLocalVerificationRunnerがpytest、ruff、mypy、Secret scan、依存脆弱性検査、プロジェクト必須検査を実行し、PASS後だけcommit、push、PRがこの順で作成されることを履歴で確認する。開発WorkflowはPR作成後に停止し、System Review以降がPR Workflowだけで起動することも確認する。Verification run ID、worktree digest、基準SHA、commit SHAを記録する。
 7. 通常CIのPython 3.12/3.13 matrixがMock-only frozen install、import、pytest、ruff、mypy、Source Package検査に成功し、Claude extraのimport確認にも成功することを確認する。
 8. Operational受入対象Workflowの全外部Actionがレビュー済みfull commit SHAへ固定されていることを確認する。
 9. system reviewへIssue本文、受入条件、PR diff、変更ファイル、検査集計が渡ることを、安全な参照IDで確認する。

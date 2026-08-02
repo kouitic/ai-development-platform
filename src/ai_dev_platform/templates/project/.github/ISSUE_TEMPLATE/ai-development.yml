@@ -46,6 +46,28 @@ body:
     validations:
       required: true
   - type: textarea
+    id: deployment
+    attributes:
+      label: デプロイ・環境構成
+      description: 12項目すべてを人間が記入してください。承認コメントのダイジェスト対象になります。
+      render: yaml
+      placeholder: |
+        deployment_answers:
+          system_usage_location: 社内ネットワーク内
+          users: 指定された社内担当者
+          usage_frequency: 平日日中
+          idle_shutdown_policy: 夜間は停止
+          restart_wait_tolerance: 15分以内
+          preproduction_environment: 本番と分離した検証環境を用意
+          release_downtime_tolerance: 30分以内
+          recovery_time_objective: 4時間以内
+          recovery_point_objective: 24時間以内
+          production_like_data_policy: 合成データのみ使用
+          monthly_cost_policy: 月額上限を超える前に停止
+          operations_owner: 人間の運用責任者
+    validations:
+      required: true
+  - type: textarea
     id: constraints
     attributes:
       label: 制約

@@ -180,6 +180,19 @@ def test_source_package_requires_git_and_a_manifest(tmp_path: Path) -> None:
         verify_source_package(missing_manifest)
 
 
+def test_source_package_rejects_a_child_of_the_repository_root(
+    initialized_project: Path, tmp_path: Path
+) -> None:
+    (initialized_project / "tests").mkdir(exist_ok=True)
+    (initialized_project / "tests" / "test_example.py").write_text(
+        "def test_ok(): assert True\n", encoding="utf-8"
+    )
+    commit_project(initialized_project)
+
+    with pytest.raises(ValueError, match="top-level directory"):
+        package_source(initialized_project / "docs", tmp_path / "source.zip")
+
+
 def test_source_package_rejects_duplicate_archive_paths(tmp_path: Path) -> None:
     duplicate = tmp_path / "duplicate.zip"
     with zipfile.ZipFile(duplicate, "w") as archive:

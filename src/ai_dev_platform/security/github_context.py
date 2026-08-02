@@ -33,6 +33,19 @@ class TrustedGitHubContext:
     workflow_path: str
 
 
+@dataclass(frozen=True, slots=True)
+class TrustedDevelopmentContext:
+    """Validated manual-development event bound to one approved Issue."""
+
+    repository: str
+    actor: str
+    event_name: str
+    issue_number: int
+    default_branch: str
+    commit_sha: str
+    workflow_path: str
+
+
 def _mapping(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise GitHubContextError(f"GitHub payload is missing {label}")
@@ -53,11 +66,10 @@ def _read_event_payload() -> dict[str, Any]:
     return _mapping(payload, "root")
 
 
-def _workflow_has_safe_context(root: Path) -> str:
-    workflow_path = ".github/workflows/ai-quality-gates.yml"
+def _workflow_has_safe_context(root: Path, workflow_path: str, *, purpose: str) -> str:
     workflow_ref = os.getenv("GITHUB_WORKFLOW_REF", "")
     if f"{workflow_path}@" not in workflow_ref.replace("\\", "/"):
-        raise GitHubContextError("only the integrated quality workflow may run Claude")
+        raise GitHubContextError(f"only the trusted {purpose} workflow may run Claude")
     path = root / workflow_path
     try:
         source = path.read_text(encoding="utf-8")
@@ -69,7 +81,7 @@ def _workflow_has_safe_context(root: Path) -> str:
     for raw_job in jobs.values():
         job = _mapping(raw_job, "workflow job")
         if "environment" in job:
-            raise GitHubContextError("Claude quality workflow must not use a GitHub Environment")
+            raise GitHubContextError("Claude workflow must not use a GitHub Environment")
     lowered = f"{workflow_ref}\n{source}".lower()
     if any(marker in lowered for marker in ("production", "prod-deploy", "deploy-production")):
         raise GitHubContextError("production workflows cannot run the development provider")
@@ -123,7 +135,9 @@ def load_trusted_github_context(
     number = pull_request.get("number", payload.get("number"))
     if not isinstance(number, int) or number < 1 or len(head_sha) < 7:
         raise GitHubContextError("Pull Request identity is invalid")
-    workflow_path = _workflow_has_safe_context(root.resolve())
+    workflow_path = _workflow_has_safe_context(
+        root.resolve(), ".github/workflows/ai-quality-gates.yml", purpose="quality"
+    )
     return TrustedGitHubContext(
         repository=repository_name,
         actor=actor,
@@ -133,5 +147,71 @@ def load_trusted_github_context(
         head_repository=head_repository_name,
         head_branch=head_branch,
         head_sha=head_sha,
+        workflow_path=workflow_path,
+    )
+
+
+def load_trusted_development_context(
+    root: Path,
+    settings: GitHubSettings,
+    *,
+    issue_number: int,
+) -> TrustedDevelopmentContext:
+    """Authorize manual development from immutable GitHub payload facts."""
+    if os.getenv("GITHUB_ACTIONS") != "true":
+        raise GitHubContextError("real Claude execution requires GitHub Actions")
+    payload = _read_event_payload()
+    event_name = os.getenv("GITHUB_EVENT_NAME", "")
+    if event_name != "workflow_dispatch":
+        raise GitHubContextError("development Claude execution requires workflow_dispatch")
+
+    repository = _mapping(payload.get("repository"), "repository")
+    repository_name = str(repository.get("full_name", ""))
+    if repository.get("private") is not True or str(repository.get("visibility", "")) != "private":
+        raise GitHubContextError("real Claude execution requires a private repository")
+    if not repository_name or os.getenv("GITHUB_REPOSITORY") != repository_name:
+        raise GitHubContextError("repository context does not match the event payload")
+
+    inputs = _mapping(payload.get("inputs"), "workflow inputs")
+    try:
+        payload_issue = int(str(inputs.get("issue", "")))
+    except ValueError as exc:
+        raise GitHubContextError("workflow Issue input is invalid") from exc
+    if payload_issue != issue_number or issue_number < 1:
+        raise GitHubContextError("workflow Issue input does not match the requested Issue")
+
+    sender = _mapping(payload.get("sender"), "sender")
+    actor = str(sender.get("login", ""))
+    if not actor or os.getenv("GITHUB_ACTOR") != actor or actor.endswith("[bot]"):
+        raise GitHubContextError("workflow actor is absent, inconsistent, or automated")
+    if not settings.allowed_actors or actor not in settings.allowed_actors:
+        raise GitHubContextError("workflow actor is not allowlisted")
+
+    default_branch = str(repository.get("default_branch", settings.default_branch))
+    if not default_branch or default_branch != settings.default_branch:
+        raise GitHubContextError("configured default branch does not match the repository")
+    if os.getenv("GITHUB_REF") != f"refs/heads/{default_branch}":
+        raise GitHubContextError("manual development must run from the default branch")
+    workflow_path = _workflow_has_safe_context(
+        root.resolve(), ".github/workflows/ai-orchestrator.yml", purpose="development"
+    )
+    workflow_ref = os.getenv("GITHUB_WORKFLOW_REF", "").replace("\\", "/")
+    if not workflow_ref.endswith(f"@refs/heads/{default_branch}"):
+        raise GitHubContextError(
+            "development workflow definition must come from the default branch"
+        )
+
+    commit_sha = os.getenv("GITHUB_SHA", "")
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
+        raise GitHubContextError("workflow commit SHA is invalid")
+    return TrustedDevelopmentContext(
+        repository=repository_name,
+        actor=actor,
+        event_name=event_name,
+        issue_number=issue_number,
+        default_branch=default_branch,
+        commit_sha=commit_sha,
         workflow_path=workflow_path,
     )

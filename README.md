@@ -102,6 +102,15 @@ uv run ai-dev approve-deployment --issue 1 --approver <承認者>
 uv run ai-dev run --issue 1
 ```
 
+実Claude＋実GitHubでは、ローカル状態をRunner間で持ち回りません。Issue Formへ構造化要件と12件の`deployment_answers`を記入し、次のコマンドが表示する二つのダイジェスト付きコメントを人間がIssueへ投稿して、`ai:approved`を付与します。
+
+```powershell
+uv run ai-dev issue-approval-template --issue 1
+uv run ai-dev issue-preflight --issue 1
+```
+
+`.ai-dev/project.yaml`のGitHub連携を有効にし、`allowed_actors`へ手動実行を許可する人間を設定したうえで、Actions画面からmainの`AI開発オーケストレーター`へIssue番号を入力します。Workflowは承認をブランチ作成前に再検証し、Claude開発、ホスト検証、Issueブランチへのcommit/push、PR作成まで進んで停止します。System Review、Business Review、QAは、そのPRイベントで起動する独立した`ai-quality-gates.yml`が担当します。
+
 両レビューとQAが完了し、人間承認待ちへ到達した後、証拠を確認した人間だけが次を実行します。
 
 ```powershell

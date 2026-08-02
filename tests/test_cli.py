@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -11,7 +12,7 @@ from ai_dev_platform.application.requirements import (
 )
 from ai_dev_platform.cli import app
 from ai_dev_platform.domain.models import TaskRecord, WorkflowState
-from ai_dev_platform.infrastructure.github import MockGitHubGateway
+from ai_dev_platform.infrastructure.github import GhCliGateway, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
 
 runner = CliRunner()
@@ -174,6 +175,40 @@ def test_cli_ask_does_not_change_state(initialized_project: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "informational" in result.output
+
+
+def test_cli_renders_and_validates_manual_issue_approvals(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = GhCliGateway(initialized_project, executable="not-invoked")
+    monkeypatch.setattr(cli_module, "_gateway", lambda _root, _name: gateway)
+    monkeypatch.setattr(
+        cli_module,
+        "render_approval_templates",
+        lambda _gateway, _issue: "要件承認コメント\n環境構成承認コメント",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "validate_approved_issue",
+        lambda _gateway, _issue: SimpleNamespace(
+            requirements_approval=SimpleNamespace(requirements_digest="a" * 64),
+            deployment_digest="b" * 64,
+        ),
+    )
+
+    template = runner.invoke(
+        app,
+        ["issue-approval-template", "--issue", "12", "--path", str(initialized_project)],
+    )
+    preflight = runner.invoke(
+        app,
+        ["issue-preflight", "--issue", "12", "--path", str(initialized_project)],
+    )
+
+    assert template.exit_code == 0, template.output
+    assert "環境構成承認コメント" in template.output
+    assert preflight.exit_code == 0, preflight.output
+    assert "承認済みIssue #12" in preflight.output
 
 
 def test_review_and_qa_commands_share_quality_evidence(

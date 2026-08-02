@@ -136,6 +136,7 @@ class WorkflowRunner:
         git: GitWorktreeGateway | None = None,
         verification_runner: VerificationRunner | None = None,
         verification_policy: VerificationPolicy | None = None,
+        stop_after_pull_request: bool = False,
     ) -> None:
         self.config = config
         self.agents = agents
@@ -145,6 +146,7 @@ class WorkflowRunner:
         self.git = git
         self.verification_runner = verification_runner
         self.verification_policy = verification_policy
+        self.stop_after_pull_request = stop_after_pull_request
         self.context_builder = TaskContextBuilder(root or Path.cwd(), github=github, git=git)
 
     def build_graph(self) -> Any:
@@ -455,6 +457,12 @@ class WorkflowRunner:
             return self._move(task, WorkflowState.REWORK_REQUIRED, "traceability_evidence_invalid")
         except (GitOperationError, GitHubError):
             return self._move(task, WorkflowState.BLOCKED, "commit_push_or_pr_failed")
+        if self.stop_after_pull_request:
+            return self._move(
+                task.model_copy(update={"resume_state": WorkflowState.SYSTEM_REVIEW}),
+                WorkflowState.PAUSED,
+                "pull_request_published_for_independent_review",
+            )
         return self._move(task, WorkflowState.SYSTEM_REVIEW, "trusted_verification_passed")
 
     def _publish_development_changes(

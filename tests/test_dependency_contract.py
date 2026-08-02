@@ -52,3 +52,39 @@ def test_gitleaks_actions_receive_the_automatic_github_token() -> None:
         assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in ci
         assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in quality
         assert "results.sarif" in gitignore
+
+
+def test_manual_claude_workflow_uses_approved_issue_preflight_without_self_attestation() -> None:
+    workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    forbidden = [
+        "AI_DEV_TRUSTED_EVENT",
+        "AI_DEV_PRIVATE_REPOSITORY",
+        "--tests-passed",
+        "--static-analysis-passed",
+    ]
+    for workflow_root in workflow_roots:
+        workflow = (workflow_root / ".github" / "workflows" / "ai-orchestrator.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "workflow_dispatch:" in workflow
+        assert "ai-dev issue-preflight" in workflow
+        assert "AI_DEV_PROVIDER: claude" in workflow
+        assert "AI_DEV_GITHUB_GATEWAY: gh" in workflow
+        assert "ai-dev run --issue" in workflow
+        assert all(value not in workflow for value in forbidden)
+
+
+def test_platform_ci_runs_on_main_while_generated_projects_protect_main() -> None:
+    platform_ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    template_ci = (
+        ROOT
+        / "src"
+        / "ai_dev_platform"
+        / "templates"
+        / "project"
+        / ".github"
+        / "workflows"
+        / "ci.yml"
+    ).read_text(encoding="utf-8")
+    assert "branches: [main]" in platform_ci
+    assert "branches-ignore: [main]" in template_ci

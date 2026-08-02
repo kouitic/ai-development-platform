@@ -33,11 +33,16 @@ from ai_dev_platform.application.deployment import (
 )
 from ai_dev_platform.application.doctor import run_doctor
 from ai_dev_platform.application.init_service import InitConflictError, initialize_project
+from ai_dev_platform.application.issue_preflight import (
+    render_approval_templates,
+    validate_approved_issue,
+)
 from ai_dev_platform.application.package_service import package_source, verify_source_package
 from ai_dev_platform.application.quality_gate import (
     run_integrated_quality_gates,
     run_quality_gate,
 )
+from ai_dev_platform.application.requirements import requirements_digest
 from ai_dev_platform.application.validator import validate_project
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import ConfigError, load_config
@@ -46,11 +51,12 @@ from ai_dev_platform.domain.models import (
     ChangedFile,
     PullRequestData,
     StageResult,
+    TaskEvidence,
     TaskRecord,
     WorkflowState,
 )
 from ai_dev_platform.infrastructure.git import MockGitWorktree, SafeGitWorktree
-from ai_dev_platform.infrastructure.github import GhCliGateway, MockGitHubGateway
+from ai_dev_platform.infrastructure.github import GhCliGateway, GitHubError, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import (
     SQLiteStateStore,
     TaskNotFoundError,
@@ -518,19 +524,47 @@ def run_command(
     loaded = _load(root)
     store = _store(root)
     gateway = _gateway(root, loaded.project.github.gateway)
+    approved_issue = None
+    if isinstance(gateway, GhCliGateway):
+        try:
+            approved_issue = validate_approved_issue(gateway, issue)
+        except (ValueError, GitHubError) as exc:
+            console.print(f"[red]承認済みIssueの事前検証に失敗しました: {exc}[/red]")
+            raise typer.Exit(2) from exc
+    try:
+        provider = create_provider(
+            loaded.project,
+            root=root,
+            purpose="development",
+            issue_number=issue,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
     try:
         task = store.get_task_by_issue(issue)
     except TaskNotFoundError:
         _seed_mock_gateway(gateway, issue_number=issue)
-        issue_data = gateway.get_issue(issue)
+        issue_data = (
+            approved_issue.issue if approved_issue is not None else gateway.get_issue(issue)
+        )
         branch = gateway.create_branch(
             issue, "ai-development", loaded.project.github.default_branch
         )
+        evidence = TaskEvidence()
+        if approved_issue is not None:
+            evidence = evidence.model_copy(
+                update={
+                    "requirements_approval": approved_issue.requirements_approval,
+                    "deployment_configuration": approved_issue.deployment_configuration,
+                }
+            )
         task = TaskRecord(
             task_id=f"issue-{issue}",
             issue_number=issue,
             commit_sha=commit_sha or _current_sha(root),
             branch=branch,
+            evidence=evidence,
             context={
                 "interaction_mode": loaded.project.interaction.mode,
                 "issue_reference": {
@@ -548,6 +582,21 @@ def run_command(
         )
         store.create_task(task)
         store.append_event(task.task_id, "github", "branch_created", "success", {"branch": branch})
+    if approved_issue is not None:
+        persisted_requirements = task.evidence.requirements_result
+        if persisted_requirements is not None and requirements_digest(
+            persisted_requirements.requirements
+        ) != requirements_digest(approved_issue.requirements):
+            console.print("[red]保存済みタスクの要件は現在の承認済みIssueと一致しません。[/red]")
+            raise typer.Exit(2)
+        evidence = task.evidence.model_copy(
+            update={
+                "requirements_approval": approved_issue.requirements_approval,
+                "deployment_configuration": approved_issue.deployment_configuration,
+            },
+            deep=True,
+        )
+        task = store.save_task(task.model_copy(update={"evidence": evidence}))
     _seed_mock_gateway(gateway, issue_number=issue, task=task)
     if commit_sha and commit_sha != task.commit_sha:
         task = store.save_task(
@@ -588,13 +637,14 @@ def run_command(
     runner = WorkflowRunner(
         loaded.project,
         loaded.agents,
-        create_provider(loaded.project, root=root),
+        provider,
         store,
         root=root,
         github=gateway,
         git=git_gateway,
         verification_runner=verification_runner,
         verification_policy=loaded.verification,
+        stop_after_pull_request=isinstance(gateway, GhCliGateway),
     )
     task = asyncio.run(runner.run(task.task_id))
     console.print(_task_table([task]))
@@ -613,6 +663,54 @@ def run_command(
             "[yellow]デプロイ先・環境構成の回答と人間承認が必要です。[/yellow] "
             "deployment-questions で未回答項目を確認してください。"
         )
+    elif task.state == WorkflowState.PAUSED and task.pull_request_number is not None:
+        console.print(
+            "[yellow]PRを作成しました。[/yellow] "
+            "以後のSystem Review、Business Review、QAはPR Workflowが独立して実行します。"
+        )
+
+
+@app.command("issue-approval-template")
+def issue_approval_template_command(
+    issue: Annotated[int, typer.Option("--issue", help="GitHub Issue number")],
+    path: Annotated[Path, typer.Option("--path", help="Project directory")] = Path("."),
+) -> None:
+    """Display digest-bound Japanese approval comments without approving the Issue."""
+    root = _root(path)
+    loaded = _load(root)
+    gateway = _gateway(root, loaded.project.github.gateway)
+    if not isinstance(gateway, GhCliGateway):
+        console.print("[red]承認コメント生成には実GitHub gatewayが必要です。[/red]")
+        raise typer.Exit(2)
+    try:
+        console.print(render_approval_templates(gateway, issue))
+    except (ValueError, GitHubError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+
+@app.command("issue-preflight")
+def issue_preflight_command(
+    issue: Annotated[int, typer.Option("--issue", help="GitHub Issue number")],
+    path: Annotated[Path, typer.Option("--path", help="Project directory")] = Path("."),
+) -> None:
+    """Validate the approved Issue before any branch or Agent execution."""
+    root = _root(path)
+    loaded = _load(root)
+    gateway = _gateway(root, loaded.project.github.gateway)
+    if not isinstance(gateway, GhCliGateway):
+        console.print("[red]Issue事前検証には実GitHub gatewayが必要です。[/red]")
+        raise typer.Exit(2)
+    try:
+        approved = validate_approved_issue(gateway, issue)
+    except (ValueError, GitHubError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"承認済みIssue #{issue}: "
+        f"要件={approved.requirements_approval.requirements_digest}, "
+        f"環境構成={approved.deployment_digest}"
+    )
 
 
 def _deployment_session(store: SQLiteStateStore, project_name: str, issue: int) -> Any:

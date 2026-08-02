@@ -19,11 +19,15 @@ Repository settingsで、Pull Request必須、required status checks、conversat
 
 ## Actions権限
 
-標準は`contents: read`です。Issue同期ジョブだけ`issues: write`、正式レビュー投稿だけ`pull-requests: write`を付与します。`contents: write`、Environment Secret、本番IAMは通常レビューへ渡しません。
+標準は`contents: read`です。手動の開発WorkflowだけIssueブランチのcommit/pushに`contents: write`を付与し、Issueはread、PRはwriteに限定します。正式レビューは`contents: read`、`issues: read`、`pull-requests: write`、`checks: write`とします。GitHub Environment、本番Secret、本番IAMはどちらにも渡しません。
 
 ## ラベル
 
-`.ai-dev`の状態と対応する`ai:*`、`risk:*`、`type:*`、`impact:*`ラベルを作成します。ラベルは表示補助であり、SQLite状態や承認Guardを上書きしません。
+`.ai-dev`の状態と対応する`ai:*`、`risk:*`、`type:*`、`impact:*`ラベルを作成します。`ai:approved`は手動開発Workflowの必須条件ですが、単独では承認にならず、要件と環境構成のダイジェスト一致も必要です。
+
+## 手動開発Workflow
+
+`.ai-dev/project.yaml`で`github.enabled: true`、`github.gateway: gh`、`github.allowed_actors`を明示します。`allowed_actors`を空にしたまま実Claude開発を起動することはできません。`ANTHROPIC_API_KEY`はRepository Secretへ登録し、Actions画面からmainの`AI開発オーケストレーター`へ承認済みIssue番号を入力します。Workflowのbranch選択をmain以外にした場合は拒否されます。
 
 ## CODEOWNERS
 

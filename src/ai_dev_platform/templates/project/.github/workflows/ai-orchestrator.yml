@@ -1,43 +1,40 @@
-name: AI orchestrator
+name: AI開発オーケストレーター
+run-name: "AI開発 Issue #${{ inputs.issue }}"
 on:
   workflow_dispatch:
     inputs:
-      issue: {description: GitHub Issue number, required: true, type: string}
-      provider: {description: Agent provider, required: true, default: mock, type: choice, options: [mock, claude]}
-      github_gateway: {description: GitHub gateway, required: true, default: mock, type: choice, options: [mock, gh]}
+      issue: {description: 承認済みGitHub Issue番号, required: true, type: string}
 permissions:
   contents: write
-  checks: write
-  issues: write
+  checks: read
+  issues: read
   pull-requests: write
+concurrency:
+  group: ai-development-${{ inputs.issue }}
+  cancel-in-progress: false
 jobs:
-  orchestrate:
+  develop:
     if: github.event.repository.private
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
+        with: {ref: "${{ github.event.repository.default_branch }}", fetch-depth: 0}
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: uv sync --frozen --extra dev --extra claude
-      - run: uv run ai-dev validate
-      - run: uv run pytest
-      - run: uv run ruff check .
-      - run: uv run mypy
-      - run: uv run --with pip-audit pip-audit
-      - uses: gitleaks/gitleaks-action@v2
-      - name: Run governed workflow
+      - name: 依存関係を導入
+        run: uv sync --frozen --extra dev --extra claude
+      - name: 設定を検証
+        run: uv run ai-dev validate
+      - name: 承認済みIssueを事前検証
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AI_DEV_GITHUB_GATEWAY: gh
+        run: uv run ai-dev issue-preflight --issue "${{ inputs.issue }}"
+      - name: Claude開発を実行
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AI_DEV_PROVIDER: ${{ inputs.provider }}
-          AI_DEV_GITHUB_GATEWAY: ${{ inputs.github_gateway }}
-          AI_DEV_TRUSTED_EVENT: "true"
-          AI_DEV_PRIVATE_REPOSITORY: "true"
-          AI_DEV_FORK_PR: "false"
-          AI_DEV_MINIMAL_PERMISSIONS: "true"
-          AI_DEV_PRODUCTION_SECRETS_PRESENT: "false"
-          AI_DEV_ALLOWED_BRANCHES: "ai/*"
-          GITHUB_REF_NAME: ai/issue-${{ inputs.issue }}-ai-development
-        run: uv run ai-dev run --issue "${{ inputs.issue }}" --commit-sha "${{ github.sha }}" --tests-passed --static-analysis-passed --secret-scan-passed --dependency-scan-passed
+          AI_DEV_PROVIDER: claude
+          AI_DEV_GITHUB_GATEWAY: gh
+        run: uv run ai-dev run --issue "${{ inputs.issue }}" --commit-sha "${{ github.sha }}"

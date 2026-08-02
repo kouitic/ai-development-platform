@@ -39,6 +39,12 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 | 6 | clean Source Package manifest | dirty拒否、全file hash、package digest、禁止物を試験 | Actions Artifact未実施 | ローカル完了・外部未受入 |
 | 7 | 文書・設定・Schema更新 | README、architecture、QA guide、report、root/templateを更新 | 文書外部レビュー未実施 | ローカル完了・外部未受入 |
 
+## 手動Workflow＋承認済みIssue経路
+
+実Claude開発用の`workflow_dispatch`を、承認済みIssue番号だけを入力する経路へ限定した。非公開repository、許可された人間actor、main上のWorkflow定義、入力Issue、実行SHAをGitHub payloadとActions contextの双方から照合する。要件と12件の環境構成は別々のSHA-256 digestに結び付けた人間コメントと`ai:approved`をブランチ作成前に検証する。開発Workflowはホスト検証後のcommit/push/PR作成で停止し、System Review、Business Review、QAはPRイベントの独立Workflowへ委譲する。
+
+Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と一致することを要求し、pytestのrepository配下temp directoryを誤って有効なpackage rootとして扱わない。ローカル自動テストは実装済みだが、実Claude・実GitHub受入は受入repository準備後に実施する。
+
 ## Operational MVP 13条件
 
 | # | 条件 | ローカル実装・Mock証拠 | 実外部受入 | 判定 |

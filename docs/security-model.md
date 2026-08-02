@@ -34,7 +34,7 @@ Web、Issue、PR、ソース内コメントは未信頼データであり、ツ�
 
 ## GitHub実行コンテキスト
 
-Claudeを伴う正式品質ゲートは、repository visibility、event type/action、PR番号、head repository、fork属性、head branch/SHA、actorをevent payloadから取得し、Actions環境値と一致する場合だけ許可する。正式Workflowは`.github/workflows/ai-quality-gates.yml`に限定し、jobの`environment`指定とproduction用途を拒否する。環境変数による安全性overrideは実Claudeには提供しない。
+Claudeを伴う正式品質ゲートは、repository visibility、event type/action、PR番号、head repository、fork属性、head branch/SHA、actorをevent payloadから取得し、Actions環境値と一致する場合だけ許可する。開発実行は別契約とし、`workflow_dispatch`の入力Issue、sender、default branchをpayloadから取得し、許可actor、`GITHUB_REF`、`GITHUB_WORKFLOW_REF`、`GITHUB_SHA`との一致を要求する。正式Workflowは品質用`.github/workflows/ai-quality-gates.yml`と開発用`.github/workflows/ai-orchestrator.yml`へ目的別に限定し、jobの`environment`指定とproduction用途を拒否する。環境変数による安全性overrideは実Claudeには提供しない。
 
 ## 外部Actionの固定方針
 

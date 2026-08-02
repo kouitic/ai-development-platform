@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+from typing import Any
+
+import yaml
+
 from ai_dev_platform.domain.models import (
     ConversationAnswer,
     ConversationSession,
@@ -9,6 +16,7 @@ from ai_dev_platform.domain.models import (
     DeploymentConfiguration,
     DeploymentQuestion,
     EvidenceReference,
+    IssueComment,
     TaskRecord,
     WorkflowState,
 )
@@ -114,6 +122,102 @@ DEPLOYMENT_QUESTIONS: tuple[DeploymentQuestion, ...] = (
     ),
 )
 
+_YAML_BLOCK = re.compile(r"```ya?ml\s*(.*?)```", flags=re.IGNORECASE | re.DOTALL)
+_APPROVAL_STATUS = re.compile(r"^ai-dev 環境構成承認:\s*(承認|却下)\s*$", flags=re.MULTILINE)
+_APPROVAL_DIGEST = re.compile(r"^環境構成ダイジェスト:\s*([0-9a-f]{64})\s*$", flags=re.MULTILINE)
+
+
+def parse_structured_deployment_answers(body: str) -> dict[str, str]:
+    """Read the fenced YAML deployment answers from an approved Issue."""
+    candidate: Any = None
+    for block in _YAML_BLOCK.findall(body):
+        try:
+            loaded = yaml.safe_load(block)
+        except yaml.YAMLError:
+            continue
+        if isinstance(loaded, dict) and "deployment_answers" in loaded:
+            candidate = loaded["deployment_answers"]
+            break
+    if not isinstance(candidate, dict):
+        raise ValueError("Issue must contain fenced YAML deployment_answers")
+    expected = {question.id for question in DEPLOYMENT_QUESTIONS}
+    actual = {str(key) for key in candidate}
+    if actual != expected:
+        raise ValueError("Issue deployment_answers must contain exactly the required questions")
+    answers = {str(key): str(value).strip() for key, value in candidate.items()}
+    if any(not answer for answer in answers.values()):
+        raise ValueError("Issue deployment answers must not be empty")
+    return answers
+
+
+def deployment_digest(answers: dict[str, str]) -> str:
+    """Return a stable digest for the complete deployment answer set."""
+    payload = json.dumps(
+        answers,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def find_deployment_approval(
+    answers: dict[str, str], comments: list[IssueComment]
+) -> IssueComment | None:
+    """Return the latest human approval bound to the deployment digest."""
+    expected_digest = deployment_digest(answers)
+    decisions: list[tuple[IssueComment, str]] = []
+    for comment in comments:
+        if comment.author_is_bot:
+            continue
+        status = _APPROVAL_STATUS.search(comment.body)
+        digest = _APPROVAL_DIGEST.search(comment.body)
+        if status is None or digest is None or digest.group(1) != expected_digest:
+            continue
+        decisions.append((comment, status.group(1)))
+    if not decisions:
+        return None
+    latest_comment, latest_status = max(decisions, key=lambda item: item[0].created_at)
+    return latest_comment if latest_status == "承認" else None
+
+
+def build_deployment_configuration(
+    answers: dict[str, str], *, approver: str, github_reference: str
+) -> DeploymentConfiguration:
+    """Build the governed configuration from complete, human-approved answers."""
+    return DeploymentConfiguration(
+        decision=Decision.PASS,
+        summary="デプロイ先と環境構成を人間が承認しました。",
+        evidence=[
+            EvidenceReference(
+                id="deployment-human-approval",
+                kind="github",
+                reference=github_reference,
+                safe_summary="人間が承認したデプロイ判断です。",
+            )
+        ],
+        deployment_target={
+            "usage_location": answers["system_usage_location"],
+            "users": answers["users"],
+            "usage_frequency": answers["usage_frequency"],
+            "idle_shutdown_policy": answers["idle_shutdown_policy"],
+            "restart_wait_tolerance": answers["restart_wait_tolerance"],
+        },
+        environments=[
+            {"name": "production", "release_downtime": answers["release_downtime_tolerance"]},
+            {"name": "preproduction", "policy": answers["preproduction_environment"]},
+        ],
+        availability_requirements={"release_downtime": answers["release_downtime_tolerance"]},
+        recovery_requirements={
+            "rto": answers["recovery_time_objective"],
+            "rpo": answers["recovery_point_objective"],
+        },
+        cost_policy={"monthly": answers["monthly_cost_policy"]},
+        restricted_data_policy={"production_like_data": answers["production_like_data_policy"]},
+        human_approved=True,
+        approver=approver,
+    )
+
 
 def start_deployment_session(project_name: str, issue_number: int) -> ConversationSession:
     """Create a stable Issue-scoped deployment conversation."""
@@ -178,39 +282,10 @@ def approve_deployment_configuration(
         raise ValueError("a formal GitHub approval record is required")
     answers = {answer.question_id: answer.answer for answer in session.answers}
     task = store.get_task_by_issue(session.issue_number)
-    configuration = DeploymentConfiguration(
-        decision=Decision.PASS,
-        summary="Deployment and environment configuration approved by a human.",
-        evidence=[
-            EvidenceReference(
-                id="deployment-human-approval",
-                kind="github",
-                reference=github_record_id,
-                safe_summary="Human-confirmed deployment decisions.",
-            )
-        ],
-        deployment_target={
-            "usage_location": answers["system_usage_location"],
-            "users": answers["users"],
-            "usage_frequency": answers["usage_frequency"],
-            "idle_shutdown_policy": answers["idle_shutdown_policy"],
-            "restart_wait_tolerance": answers["restart_wait_tolerance"],
-        },
-        environments=[
-            {"name": "production", "release_downtime": answers["release_downtime_tolerance"]},
-            {"name": "preproduction", "policy": answers["preproduction_environment"]},
-        ],
-        availability_requirements={
-            "release_downtime": answers["release_downtime_tolerance"],
-        },
-        recovery_requirements={
-            "rto": answers["recovery_time_objective"],
-            "rpo": answers["recovery_point_objective"],
-        },
-        cost_policy={"monthly": answers["monthly_cost_policy"]},
-        restricted_data_policy={"production_like_data": answers["production_like_data_policy"]},
-        human_approved=True,
+    configuration = build_deployment_configuration(
+        answers,
         approver=approver,
+        github_reference=github_record_id,
     )
     evidence = task.evidence.model_copy(
         update={"deployment_configuration": configuration}, deep=True

@@ -7,6 +7,7 @@ import pytest
 from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.security.github_context import (
     GitHubContextError,
+    load_trusted_development_context,
     load_trusted_github_context,
 )
 
@@ -111,3 +112,78 @@ def test_required_environment_and_production_workflow_are_rejected(
         load_trusted_github_context(
             initialized_project, load_config(initialized_project).project.github
         )
+
+
+def _development_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    *,
+    issue: str = "12",
+) -> None:
+    event_path = root / "development-event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "inputs": {"issue": issue},
+                "repository": {
+                    "full_name": "owner/private-repo",
+                    "private": True,
+                    "visibility": "private",
+                    "default_branch": "main",
+                },
+                "sender": {"login": "trusted-human"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    values = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REPOSITORY": "owner/private-repo",
+        "GITHUB_ACTOR": "trusted-human",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": "b" * 40,
+        "GITHUB_WORKFLOW_REF": (
+            "owner/private-repo/.github/workflows/ai-orchestrator.yml@refs/heads/main"
+        ),
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_manual_development_context_is_bound_to_actor_issue_and_default_branch(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _development_environment(monkeypatch, initialized_project)
+    settings = load_config(initialized_project).project.github.model_copy(
+        update={"allowed_actors": ["trusted-human"]}
+    )
+
+    context = load_trusted_development_context(initialized_project, settings, issue_number=12)
+
+    assert context.issue_number == 12
+    assert context.actor == "trusted-human"
+    assert context.default_branch == "main"
+
+
+@pytest.mark.parametrize("unsafe", ["issue", "branch", "actor"])
+def test_manual_development_context_rejects_mismatched_authority(
+    initialized_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe: str,
+) -> None:
+    _development_environment(
+        monkeypatch,
+        initialized_project,
+        issue="13" if unsafe == "issue" else "12",
+    )
+    if unsafe == "branch":
+        monkeypatch.setenv("GITHUB_REF", "refs/heads/feature")
+    allowed_actors = [] if unsafe == "actor" else ["trusted-human"]
+    settings = load_config(initialized_project).project.github.model_copy(
+        update={"allowed_actors": allowed_actors}
+    )
+
+    with pytest.raises(GitHubContextError):
+        load_trusted_development_context(initialized_project, settings, issue_number=12)

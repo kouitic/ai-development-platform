@@ -214,6 +214,68 @@ def test_mock_provider_does_not_require_claude_sdk(
     assert isinstance(create_provider(config, root=initialized_project), MockAgentProvider)
 
 
+def test_claude_development_provider_accepts_only_the_manual_issue_context(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_dev_platform.providers.factory.importlib.util.find_spec",
+        lambda _: SimpleNamespace(),
+    )
+    monkeypatch.setenv("AI_DEV_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-in-test-environment")
+    event_path = initialized_project / "development-event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "inputs": {"issue": "12"},
+                "repository": {
+                    "full_name": "owner/private-repo",
+                    "private": True,
+                    "visibility": "private",
+                    "default_branch": "main",
+                },
+                "sender": {"login": "trusted-human"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REPOSITORY": "owner/private-repo",
+        "GITHUB_ACTOR": "trusted-human",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": "b" * 40,
+        "GITHUB_WORKFLOW_REF": (
+            "owner/private-repo/.github/workflows/ai-orchestrator.yml@refs/heads/main"
+        ),
+    }
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    config = load_config(initialized_project).project
+    real_config = config.model_copy(
+        update={
+            "github": config.github.model_copy(
+                update={
+                    "enabled": True,
+                    "gateway": "gh",
+                    "allowed_actors": ["trusted-human"],
+                }
+            )
+        }
+    )
+
+    provider = create_provider(
+        real_config,
+        root=initialized_project,
+        purpose="development",
+        issue_number=12,
+    )
+
+    assert isinstance(provider, ClaudeAgentProvider)
+
+
 def test_claude_provider_selection_reports_missing_optional_sdk(
     initialized_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

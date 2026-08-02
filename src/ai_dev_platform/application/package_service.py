@@ -92,6 +92,9 @@ def _run_git(root: Path, *arguments: str) -> str:
 
 
 def _clean_git_commit(root: Path) -> str:
+    repository_root = Path(_run_git(root, "rev-parse", "--show-toplevel")).resolve()
+    if repository_root != root.resolve():
+        raise ValueError("source package requires a valid Git repository top-level directory")
     status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     if status:
         dirty_files = sorted(line[3:].strip() for line in status.splitlines() if len(line) >= 4)
