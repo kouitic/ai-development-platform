@@ -1,0 +1,16 @@
+schema_version: "1.0"
+deny_secret_reads: true
+forbidden_read_patterns:
+  - .env
+  - .env.*
+  - "**/.aws/credentials"
+  - "**/.ssh/**"
+  - "**/.config/gh/hosts.yml"
+  - .ai-dev/credentials/**
+forbidden_commands: [env, printenv, git push, git merge, gh pr merge]
+secret_scanning:
+  pre_commit: true
+  continuous_integration: true
+  history: true
+on_detection: SECURITY_INCIDENT_REQUIRES_HUMAN
+require_revocation_and_reissue: true

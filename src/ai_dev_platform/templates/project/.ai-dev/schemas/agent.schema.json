@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-dev/agent.schema.json",
+  "type": "object",
+  "required": ["schema_version", "id", "title", "role", "expertise", "responsibilities", "forbidden_actions", "system_prompt", "provider", "model", "max_turns", "available_tools", "forbidden_tools", "readable_paths", "writable_paths", "protected_paths", "forbidden_commands", "read_only", "internet_access", "output_schema", "review_criteria", "reference_materials"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "title": {"type": "string"},
+    "role": {"type": "string"},
+    "expertise": {"type": "array", "items": {"type": "string"}},
+    "responsibilities": {"type": "array", "items": {"type": "string"}},
+    "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+    "system_prompt": {"type": "string"},
+    "provider": {"enum": ["project_default", "mock", "claude"]},
+    "model": {"type": "string"},
+    "max_turns": {"type": "integer", "minimum": 1},
+    "available_tools": {"type": "array", "items": {"type": "string"}},
+    "forbidden_tools": {"type": "array", "items": {"type": "string"}},
+    "readable_paths": {"type": "array", "items": {"type": "string"}},
+    "writable_paths": {"type": "array", "items": {"type": "string"}},
+    "protected_paths": {"type": "array", "items": {"type": "string"}},
+    "forbidden_commands": {"type": "array", "items": {"type": "string"}},
+    "read_only": {"type": "boolean"},
+    "internet_access": {"type": "object"},
+    "output_schema": {"type": "string"},
+    "review_criteria": {"type": "array", "items": {"type": "string"}},
+    "reference_materials": {"type": "array", "items": {"type": "string"}}
+  }
+}

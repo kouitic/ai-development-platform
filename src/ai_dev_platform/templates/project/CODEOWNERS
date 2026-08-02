@@ -1,0 +1,8 @@
+# Replace the placeholder with an actual GitHub user or team before enabling branch protection.
+* @replace-with-github-owner
+.github/ @replace-with-github-owner
+.ai-dev/ @replace-with-github-owner
+docs/business-rules/ @replace-with-github-owner
+docs/review-standards/ @replace-with-github-owner
+docs/quality/ @replace-with-github-owner
+evaluation/expected/ @replace-with-github-owner

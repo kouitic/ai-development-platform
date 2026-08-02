@@ -1,0 +1,12 @@
+schema_version: "1.0"
+explicit_reference_required: [issue_number, stage, commit_sha, approver]
+always_required:
+  - business_requirements
+  - quality_criteria
+  - production_like_data
+  - main_merge
+  - production_deployment
+  - production_data_change
+  - rollback
+ambiguous_phrases_are_not_approval: [いいと思う, 問題なさそう, 進めて, 大丈夫]
+invalidate_on_commit_change: true

@@ -1,0 +1,67 @@
+name: AI quality gates
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  checks: write
+  issues: read
+  pull-requests: write
+
+concurrency:
+  group: ai-quality-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  ordered-quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --frozen --extra dev --extra claude
+      - name: Validate governed configuration
+        run: uv run ai-dev validate
+      - name: Build formal source submission
+        run: uv run ai-dev package-source --output .ai-dev/local/submission.zip
+      - name: Inspect formal source submission
+        run: uv run ai-dev verify-source-package --archive .ai-dev/local/submission.zip
+      - name: Secret history scan
+        uses: gitleaks/gitleaks-action@v2
+      - name: Resolve linked Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          issue_number="$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number')"
+          test -n "$issue_number"
+          echo "ISSUE_NUMBER=$issue_number" >> "$GITHUB_ENV"
+      - name: CI, System Review, Business Review, and QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}
+          AI_DEV_GITHUB_GATEWAY: gh
+        run: >-
+          uv run ai-dev quality-gates
+          --issue "$ISSUE_NUMBER"
+          --pr "${{ github.event.pull_request.number }}"
+          --base-sha "${{ github.event.pull_request.base.sha }}"
+          --head-sha "${{ github.event.pull_request.head.sha }}"
+          --artifact-directory .ai-dev/local/quality-artifacts
+      - name: Upload sanitized quality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-quality-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: .ai-dev/local/quality-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

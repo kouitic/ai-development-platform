@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QaAssessmentResult",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {"type": "object", "required": ["reviewed_evidence_ids", "contradictions", "residual_risk_ids"], "properties": {
+      "reviewed_evidence_ids": {"type": "array", "items": {"type": "string"}},
+      "contradictions": {"type": "array", "items": {"type": "string"}},
+      "residual_risk_ids": {"type": "array", "items": {"type": "string"}},
+      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1}
+    }}
+  ]
+}

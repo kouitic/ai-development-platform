@@ -1,0 +1,52 @@
+schema_version: "1.0"
+project:
+  name: "{{ project_name }}"
+  description: "Human-governed AI-assisted system development project"
+provider: mock
+interaction:
+  mode: supervised
+workflow:
+  max_iterations: 3
+  max_agent_turns: 40
+  timeout_minutes: 60
+  optional_requirement_traceability_required: false
+budget:
+  per_task:
+    warning_usd: 5
+    stop_usd: 10
+  monthly:
+    warning_usd: 50
+    stop_usd: 100
+  max_execution_minutes: 60
+  max_parallel_agents: 1
+task_execution:
+  mode: single
+  max_parallel_tasks: 1
+  allow_parallel_read_only_reviews: true
+  conflict_detection: false
+  protected_path_exclusive_lock: false
+github:
+  enabled: false
+  gateway: mock
+  default_branch: main
+  allowed_branch_patterns: ["ai/*"]
+  allowed_actors: []
+agents:
+  - conversation
+  - developer
+  - system-reviewer
+  - business-reviewer
+  - qa
+protected_paths:
+  - .github/**
+  - .ai-dev/**
+  - orchestrator/**
+  - docs/business-rules/**
+  - docs/review-standards/**
+  - docs/quality/**
+  - evaluation/expected/**
+quality_gates:
+  - system-review
+  - business-review
+  - qa-assessment
+  - human-approval

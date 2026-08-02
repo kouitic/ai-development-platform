@@ -1,0 +1,14 @@
+schema_version: "1.0"
+classifications:
+  - PUBLIC_DUMMY
+  - SYNTHETIC
+  - MASKED_PRODUCTION_LIKE
+  - RESTRICTED_PRODUCTION_LIKE
+  - PRODUCTION
+git_allowed: [PUBLIC_DUMMY, SYNTHETIC]
+normal_ai_state_allowed: [PUBLIC_DUMMY, SYNTHETIC]
+forbidden_paths: [restricted-test-data/**, production-like-data/**, artifacts/private/**]
+restricted_validation:
+  enabled: false
+  human_approval_required: true
+on_possible_exposure: DATA_EXPOSURE_REQUIRES_HUMAN

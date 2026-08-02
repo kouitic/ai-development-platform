@@ -1,0 +1,19 @@
+schema_version: "1.0"
+commands:
+  - name: pytest
+    argv: [uv, run, pytest]
+    required: true
+    timeout_seconds: 1200
+  - name: ruff-check
+    argv: [uv, run, ruff, check, .]
+    required: true
+    timeout_seconds: 300
+  - name: mypy
+    argv: [uv, run, mypy]
+    required: true
+    timeout_seconds: 600
+  - name: dependency-vulnerability-scan
+    argv: [uv, run, --with, pip-audit, pip-audit, --cache-dir, .ai-dev/local/pip-audit-cache]
+    required: true
+    timeout_seconds: 600
+secret_scan: true

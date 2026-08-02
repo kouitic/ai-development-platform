@@ -1,0 +1,225 @@
+import asyncio
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from ai_dev_platform.config.loader import load_config
+from ai_dev_platform.domain.models import AgentRequest, AgentRunStatus
+from ai_dev_platform.providers.claude import ClaudeAgentProvider
+from ai_dev_platform.providers.factory import create_provider
+from ai_dev_platform.providers.mock import MockAgentProvider
+
+SCHEMA = {
+    "type": "object",
+    "required": ["decision", "summary"],
+    "properties": {"decision": {"const": "PASS"}, "summary": {"type": "string"}},
+}
+
+
+def request(timeout: float = 1) -> AgentRequest:
+    return AgentRequest(
+        agent_id="qa",
+        prompt="evaluate",
+        model="default",
+        max_turns=2,
+        timeout_seconds=timeout,
+        max_budget_usd=1,
+        output_schema=SCHEMA,
+    )
+
+
+def fake_sdk(monkeypatch: pytest.MonkeyPatch, query: object) -> None:
+    class Options:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    monkeypatch.setitem(
+        sys.modules,
+        "claude_agent_sdk",
+        SimpleNamespace(ClaudeAgentOptions=Options, query=query),
+    )
+
+
+def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[SimpleNamespace(text=json.dumps({"decision": "PASS", "summary": "ok"}))],
+            total_cost_usd=0.1,
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.SUCCESS
+    assert result.output["decision"] == "PASS"
+    assert result.estimated_cost_usd == 0.1
+
+
+def test_claude_provider_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(content=[SimpleNamespace(text="not json")])
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.REJECTED
+    assert result.error_code == "invalid_structured_output"
+
+
+def test_claude_runtime_denies_host_test_and_github_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**kwargs: object):
+        options = kwargs["options"]
+        callback = options.kwargs["can_use_tool"]
+        for tool in ("Test", "GitHubComment"):
+            decision = await callback(tool, {}, None)
+            behavior = (
+                decision.get("behavior")
+                if isinstance(decision, dict)
+                else getattr(decision, "behavior", "")
+            )
+            assert behavior == "deny"
+        yield SimpleNamespace(
+            content=[SimpleNamespace(text=json.dumps({"decision": "PASS", "summary": "ok"}))]
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.SUCCESS
+
+
+def test_claude_provider_handles_exception_without_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def query(**_: object):
+        if False:
+            yield None
+        raise RuntimeError("sensitive provider detail")
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.ERROR
+    assert "provider detail" not in result.summary
+
+
+def test_claude_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def query(**_: object):
+        await asyncio.sleep(0.05)
+        yield SimpleNamespace(content=[])
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request(timeout=0.001)))
+    assert result.status == AgentRunStatus.TIMEOUT
+
+
+def test_parse_fenced_json_and_reject_array() -> None:
+    parsed = ClaudeAgentProvider._parse_json('```json\n{"decision":"PASS"}\n```')
+    assert parsed["decision"] == "PASS"
+    with pytest.raises(ValueError):
+        ClaudeAgentProvider._parse_json("[]")
+
+
+def test_mock_timeout_is_structured() -> None:
+    provider = MockAgentProvider(delay_seconds=0.05)
+    result = asyncio.run(provider.execute(request(timeout=0.001)))
+    assert result.status == AgentRunStatus.TIMEOUT
+
+
+def test_provider_factory_enforces_real_runtime_trust(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_dev_platform.providers.factory.importlib.util.find_spec",
+        lambda _: SimpleNamespace(),
+    )
+    config = load_config(initialized_project).project
+    monkeypatch.setenv("AI_DEV_PROVIDER", "mock")
+    assert isinstance(create_provider(config), MockAgentProvider)
+
+    monkeypatch.setenv("AI_DEV_PROVIDER", "unsupported")
+    with pytest.raises(ValueError, match="unsupported"):
+        create_provider(config)
+
+    monkeypatch.setenv("AI_DEV_PROVIDER", "claude")
+    with pytest.raises(ValueError, match="credential"):
+        create_provider(config, root=initialized_project)
+
+    for name in (
+        "AI_DEV_TRUSTED_EVENT",
+        "AI_DEV_PRIVATE_REPOSITORY",
+        "AI_DEV_MINIMAL_PERMISSIONS",
+    ):
+        monkeypatch.setenv(name, "true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-in-test-environment")
+    monkeypatch.setenv("AI_DEV_FORK_PR", "false")
+    monkeypatch.setenv("AI_DEV_PRODUCTION_SECRETS_PRESENT", "false")
+    monkeypatch.setenv("AI_DEV_ALLOWED_BRANCHES", "ai/*")
+    monkeypatch.setenv("GITHUB_REF_NAME", "ai/issue-1-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-in-test-environment")
+    real_config = config.model_copy(
+        update={"github": config.github.model_copy(update={"enabled": True, "gateway": "gh"})}
+    )
+    with pytest.raises(ValueError, match="GitHub Actions"):
+        create_provider(real_config, root=initialized_project)
+
+    event_path = initialized_project / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "action": "synchronize",
+                "number": 1,
+                "repository": {
+                    "full_name": "owner/private-repo",
+                    "private": True,
+                    "visibility": "private",
+                },
+                "sender": {"login": "reviewer"},
+                "pull_request": {
+                    "number": 1,
+                    "head": {
+                        "ref": "ai/issue-1-test",
+                        "sha": "a" * 40,
+                        "repo": {
+                            "full_name": "owner/private-repo",
+                            "fork": False,
+                        },
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/private-repo")
+    monkeypatch.setenv("GITHUB_HEAD_REF", "ai/issue-1-test")
+    monkeypatch.setenv("GITHUB_ACTOR", "reviewer")
+    monkeypatch.setenv(
+        "GITHUB_WORKFLOW_REF",
+        "owner/private-repo/.github/workflows/ai-quality-gates.yml@refs/pull/1/merge",
+    )
+    assert isinstance(create_provider(real_config, root=initialized_project), ClaudeAgentProvider)
+
+
+def test_mock_provider_does_not_require_claude_sdk(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(initialized_project).project
+    monkeypatch.setattr(
+        "ai_dev_platform.providers.factory.importlib.util.find_spec", lambda _: None
+    )
+    monkeypatch.setenv("AI_DEV_PROVIDER", "mock")
+    assert isinstance(create_provider(config, root=initialized_project), MockAgentProvider)
+
+
+def test_claude_provider_selection_reports_missing_optional_sdk(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(initialized_project).project
+    monkeypatch.setattr(
+        "ai_dev_platform.providers.factory.importlib.util.find_spec", lambda _: None
+    )
+    monkeypatch.setenv("AI_DEV_PROVIDER", "claude")
+    with pytest.raises(ValueError, match="'claude' extra"):
+        create_provider(config, root=initialized_project)

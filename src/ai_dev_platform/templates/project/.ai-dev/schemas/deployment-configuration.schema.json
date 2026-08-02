@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DeploymentConfiguration","allOf":[{"$ref":"stage-result.schema.json"},{"type":"object","required":["deployment_target","environments","availability_requirements","recovery_requirements","cost_policy","restricted_data_policy","human_approved"]}]}

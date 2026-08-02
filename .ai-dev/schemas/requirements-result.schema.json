@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RequirementsResult",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {
+      "type": "object",
+      "required": [
+        "requirements",
+        "business_requirements",
+        "acceptance_criteria",
+        "scope",
+        "out_of_scope",
+        "human_decisions",
+        "requirements_source",
+        "human_approved"
+      ],
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "type", "description", "acceptance_criteria", "required", "source_reference"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "type": {"enum": ["BUSINESS", "FUNCTIONAL", "NON_FUNCTIONAL", "SECURITY", "OPERATIONAL"]},
+              "description": {"type": "string", "minLength": 1},
+              "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+              "required": {"type": "boolean"},
+              "source_reference": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "business_requirements": {"type": "array", "items": {"type": "string"}},
+        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+        "scope": {"type": "array", "items": {"type": "string"}},
+        "out_of_scope": {"type": "array", "items": {"type": "string"}},
+        "human_decisions": {"type": "array", "items": {"type": "string"}},
+        "requirements_source": {"enum": ["STRUCTURED_ISSUE", "AI_CANDIDATE"]},
+        "human_approved": {"type": "boolean"}
+      }
+    }
+  ]
+}

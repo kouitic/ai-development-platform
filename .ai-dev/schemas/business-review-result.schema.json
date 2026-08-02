@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BusinessReviewResult",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {"type": "object", "required": ["evaluated_requirement_ids", "source_references"], "properties": {
+      "evaluated_requirement_ids": {"type": "array", "items": {"type": "string"}},
+      "source_references": {"type": "array", "items": {"type": "string"}}, "data_as_of": {"type": ["string", "null"]},
+      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1}
+    }}
+  ]
+}

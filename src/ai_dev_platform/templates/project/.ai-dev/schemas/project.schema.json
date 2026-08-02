@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-dev/project.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project", "provider", "interaction", "workflow", "budget", "task_execution", "github", "agents", "protected_paths", "quality_gates"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "project": {"type": "object", "additionalProperties": false, "required": ["name", "description"], "properties": {"name": {"type": "string", "minLength": 1}, "description": {"type": "string"}}},
+    "provider": {"enum": ["mock", "claude"]},
+    "interaction": {"type": "object"},
+    "workflow": {"type": "object", "properties": {"optional_requirement_traceability_required": {"type": "boolean"}}},
+    "budget": {"type": "object"},
+    "task_execution": {"type": "object"},
+    "github": {"type": "object"},
+    "agents": {"type": "array", "minItems": 5, "uniqueItems": true, "items": {"type": "string"}},
+    "protected_paths": {"type": "array", "items": {"type": "string"}},
+    "quality_gates": {"type": "array", "items": {"type": "string"}}
+  }
+}

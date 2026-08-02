@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DeveloperResult","allOf":[{"$ref":"stage-result.schema.json"},{"type":"object","required":["addressed_finding_ids","changed_files","change_summary","added_tests","test_results","unresolved_finding_ids","unresolved_reasons"]}]}

@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ai-dev-validate
+        name: ai-dev configuration and sensitive data validation
+        entry: ai-dev validate
+        language: system
+        pass_filenames: false
+      - id: gitleaks
+        name: gitleaks
+        entry: gitleaks protect --staged --redact
+        language: system
+        pass_filenames: false

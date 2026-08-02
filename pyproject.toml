@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-development-platform"
+version = "0.1.0"
+description = "Human-governed, multi-agent system development workflow CLI"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary - private use; license not yet selected" }
+authors = [{ name = "ai-development-platform maintainers" }]
+dependencies = [
+  "jsonschema>=4.23,<5",
+  "langgraph>=1.0,<2",
+  "prompt-toolkit>=3.0.48,<4",
+  "pydantic>=2.10,<3",
+  "PyYAML>=6.0.2,<7",
+  "rich>=13.9,<15",
+  "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+claude = [
+  "claude-agent-sdk>=0.1,<0.2",
+]
+dev = [
+  "mypy>=1.14,<2",
+  "pip-licenses>=5,<6",
+  "pre-commit>=4,<5",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+  "types-jsonschema>=4.25,<5",
+  "types-PyYAML>=6.0.12,<7",
+]
+
+[project.scripts]
+ai-dev = "ai_dev_platform.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_dev_platform"]
+
+[tool.hatch.build]
+exclude = [
+  "/.ai-dev/local/**",
+  "/.coverage",
+  "/.git/**",
+  "/.mypy_cache/**",
+  "/.pip-audit-cache/**",
+  "/.pip-audit-cache*/**",
+  "/.pytest_cache/**",
+  "/.pytest-tmp/**",
+  "/.ruff_cache/**",
+  "/.uv-cache*/**",
+  "/.uv-tools*/**",
+  "/.uv-bin*/**",
+  "/.venv/**",
+  "/dist/**",
+  "**/*.zip",
+  "**/__pycache__",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pip-audit-cache*",
+  ".pytest_cache",
+  ".pytest-tmp",
+  ".ruff_cache",
+  ".uv-cache*",
+  ".uv-tools*",
+  ".uv-bin*",
+  ".venv",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["ai_dev_platform"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --basetemp=.pytest-tmp --cov=ai_dev_platform --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["ai_dev_platform"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

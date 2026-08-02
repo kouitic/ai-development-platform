@@ -1,0 +1,69 @@
+name: AI development request
+description: Create a governed AI development task
+title: "[AI] "
+labels: ["ai:ready"]
+body:
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: 何を改善し、誰にどのような価値を提供するか記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景と現在の問題
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対象範囲と対象外
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: 構造化要件
+      description: 各要件に一意なID、種別、説明、受入条件、必須性を設定してください。この人間作成セクションが正式要件になります。
+      render: yaml
+      placeholder: |
+        requirements:
+          - id: BR-001
+            type: BUSINESS
+            description: データ不足時は売買を推奨しない
+            acceptance_criteria:
+              - 必須データ欠損時に推奨結果を返さない
+            required: true
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受入条件
+      description: 構造化要件に記載した受入条件を補足する横断的な完了条件があれば記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 制約
+  - type: textarea
+    id: impacts
+    attributes:
+      label: 利用者・業務・データ・セキュリティ・本番への影響
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 想定される品質リスク
+  - type: textarea
+    id: references
+    attributes:
+      label: 関連資料
+  - type: textarea
+    id: decisions
+    attributes:
+      label: 人間判断が必要な事項

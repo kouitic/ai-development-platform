@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeploymentConfiguration",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {"type": "object", "required": ["deployment_target", "environments", "availability_requirements", "recovery_requirements", "cost_policy", "restricted_data_policy", "human_approved"],
+     "properties": {
+       "deployment_target": {"type": "object"}, "environments": {"type": "array", "items": {"type": "object"}},
+       "availability_requirements": {"type": "object"}, "recovery_requirements": {"type": "object"},
+       "cost_policy": {"type": "object"}, "restricted_data_policy": {"type": "object"},
+       "human_approved": {"type": "boolean"}, "approver": {"type": ["string", "null"]}
+     }}
+  ]
+}

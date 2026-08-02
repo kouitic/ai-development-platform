@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Clean install for Mock runtime
+        run: uv sync --frozen --extra dev
+      - name: Confirm Claude SDK is not a Mock dependency
+        run: uv run --no-sync python -c "import importlib.util; assert importlib.util.find_spec('claude_agent_sdk') is None"
+      - name: Import package
+        run: uv run --no-sync python -c "import ai_dev_platform"
+      - name: Format
+        run: uv run --no-sync ruff format --check .
+      - name: Lint
+        run: uv run --no-sync ruff check .
+      - name: Type check
+        run: uv run --no-sync mypy
+      - name: Unit tests and coverage
+        run: uv run --no-sync pytest
+      - name: Secret scan of Git history and tracked files
+        uses: gitleaks/gitleaks-action@v2
+      - name: Dependency vulnerabilities
+        run: uv run --with pip-audit pip-audit
+      - name: Dependency licenses
+        run: uv run --no-sync pip-licenses --format=markdown
+      - name: Build matrix source ZIP
+        run: uv run --no-sync ai-dev package-source --output .ai-dev/local/ci-source.zip
+      - name: Verify matrix source ZIP
+        run: uv run --no-sync ai-dev verify-source-package --archive .ai-dev/local/ci-source.zip
+      - name: Build formal source ZIP
+        if: matrix.python-version == '3.12'
+        run: uv run --no-sync ai-dev package-source --output project-source.zip
+      - name: Verify formal source ZIP
+        if: matrix.python-version == '3.12'
+        run: uv run --no-sync ai-dev verify-source-package --archive project-source.zip
+      - name: Upload formal source ZIP
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-source
+          path: project-source.zip
+          if-no-files-found: error
+      - name: Clean install with Claude extra
+        run: uv sync --frozen --extra dev --extra claude
+      - name: Import Claude SDK
+        run: uv run --no-sync python -c "import claude_agent_sdk"

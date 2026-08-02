@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-dev/workflow.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "start", "deterministic_nodes", "nodes", "transitions", "rework", "approval_gates", "incident_states"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "start": {"const": "NEW"},
+    "deterministic_nodes": {"type": "array", "contains": {"const": "AUTOMATED_TESTING"}},
+    "nodes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "transitions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "rework": {"type": "object", "required": ["max_iterations", "return_to"], "properties": {"max_iterations": {"type": "integer", "minimum": 1, "maximum": 10}, "return_to": {"const": "IMPLEMENTING"}}},
+    "approval_gates": {"type": "array", "contains": {"const": "HUMAN_APPROVAL_REQUIRED"}},
+    "incident_states": {"type": "object"}
+  }
+}
