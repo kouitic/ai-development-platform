@@ -20,13 +20,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1、Node.js 24対応
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0、Node.js 24対応
+        with:
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0、Node.js 24対応
         with:
           enable-cache: true
           prune-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0、Node.js 24対応
-        with:
-          python-version: ${{ matrix.python-version }}
       - name: Clean install for Mock runtime
         run: uv sync --frozen --extra dev
       - name: Confirm Claude SDK is not a Mock dependency

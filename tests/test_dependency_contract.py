@@ -128,3 +128,4 @@ def test_setup_uv_v9_preserves_the_previous_cache_pruning_policy() -> None:
     for workflow_root in workflow_roots:
         ci = (workflow_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         assert "enable-cache: true\n          prune-cache: true" in ci
+        assert ci.index("actions/setup-python@") < ci.index("astral-sh/setup-uv@")
