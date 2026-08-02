@@ -38,6 +38,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+results.sarif
 htmlcov/
 dist/
 build/

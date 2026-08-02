@@ -47,6 +47,8 @@ def test_gitleaks_actions_receive_the_automatic_github_token() -> None:
         quality = (workflow_root / ".github" / "workflows" / "ai-quality-gates.yml").read_text(
             encoding="utf-8"
         )
+        gitignore = (workflow_root / ".gitignore").read_text(encoding="utf-8")
         assert "pull-requests: read" in ci
         assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in ci
         assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in quality
+        assert "results.sarif" in gitignore
