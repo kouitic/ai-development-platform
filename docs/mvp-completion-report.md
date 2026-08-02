@@ -27,6 +27,18 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 | 9 | 全追加テスト成功 | ローカル回帰実施 | 3.13未実施 | ローカル完了・外部未受入 |
 | 10 | README・MVP報告更新 | 更新済み | 文書外部レビュー未実施 | ローカル完了・外部未受入 |
 
+## 第4回レビュー対応の実装状態
+
+| # | 完了条件 | ローカル状態 | 外部状態 | 判定 |
+|---:|---|---|---|---|
+| 1 | VerificationからTraceabilityを自動捏造しない | 初期recordを空にし、不足時停止を試験 | 実PR未実施 | ローカル完了・外部未受入 |
+| 2 | 要件別の設計・実装参照 | DeveloperResult候補を実在path・保護path・commitで検証 | 実Claude未実施 | ローカル完了・外部未受入 |
+| 3 | 受入条件と実test caseの対応 | pytest JUnit解析、node ID、PASS限定、commit照合を試験 | Actions未実施 | ローカル完了・外部未受入 |
+| 4 | 正式な人間要件承認 | 正規化digest、GitHub投稿者、変更・却下による無効化を試験 | 実Issue未実施 | ローカル完了・外部未受入 |
+| 5 | Review対象要件と種別Policy | SYSTEM/BUSINESS/QA対象ID、対象外理由、5要件種別を試験 | 実Review未実施 | ローカル完了・外部未受入 |
+| 6 | clean Source Package manifest | dirty拒否、全file hash、package digest、禁止物を試験 | Actions Artifact未実施 | ローカル完了・外部未受入 |
+| 7 | 文書・設定・Schema更新 | README、architecture、QA guide、report、root/templateを更新 | 文書外部レビュー未実施 | ローカル完了・外部未受入 |
+
 ## Operational MVP 13条件
 
 | # | 条件 | ローカル実装・Mock証拠 | 実外部受入 | 判定 |
@@ -47,19 +59,19 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 
 ## ローカル検証結果（2026-08-02 JST）
 
-- `ruff format --check .`: 成功（80 files）
+- `ruff format --check .`: 成功（85 files）
 - `ruff check .`: 成功
 - strict `mypy`: 成功（49 source files）
-- `pytest`: 122 passed、1 skipped、coverage 80.59%（基準80%）
+- `pytest`: 156 passed、1 skipped、coverage 80.52%（基準80%）
 - skipはWindowsで実symlink作成権限がないケース。解決済み実体パスが保護対象へ向く回避試験は非skipで成功
 - `ai-dev validate`: 成功
 - JSON 22件・YAML 34件: parse成功。うちroot/templateのGitHub Actions YAMLは6件
 - wheel/sdist build: 成功。2成果物・249 archive entries中、ZIP/cache/build/venv等の混入0件
-- `ai-dev package-source`＋`verify-source-package`: 163 files、除外対象混入0件、必須source/config/template/test/docs欠落0件
+- `ai-dev package-source`＋`verify-source-package`: 169 files（manifestを含む）、除外対象混入0件、必須source/config/template/test/docs欠落0件
 - `pip-audit`: 既知脆弱性0件。ローカルパッケージ自身はPyPI非公開のため監査対象外
 - `pip-licenses`: dev＋Claude optionalを含む90パッケージを確認。リポジトリ自身の未選択ライセンス以外に追加判断が必要な結果なし
 - 内蔵Secret/Data scan: 検出0件
-- ローカルPython 3.13は未導入のため実行未完了。3.12/3.13 matrixの成功判定はGitHub Actions受入後に行う
+- ローカルPython 3.13.14で全テスト成功。Python 3.12のローカル実行および3.12/3.13 matrixの成功判定はGitHub Actions受入後に行う
 
 ## Mockで確認した範囲
 

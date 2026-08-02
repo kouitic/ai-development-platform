@@ -68,6 +68,51 @@ class ReviewType(StrEnum):
     QA = "QA"
 
 
+class RequirementType(StrEnum):
+    """Formal requirement categories used by review-coverage policy."""
+
+    BUSINESS = "BUSINESS"
+    FUNCTIONAL = "FUNCTIONAL"
+    NON_FUNCTIONAL = "NON_FUNCTIONAL"
+    SECURITY = "SECURITY"
+    OPERATIONAL = "OPERATIONAL"
+
+
+class ReviewCoverageRule(StrictModel):
+    """Required formal reviews for one requirement category."""
+
+    required_reviews: list[ReviewType] = Field(min_length=1)
+
+    @field_validator("required_reviews")
+    @classmethod
+    def reviews_are_unique(cls, value: list[ReviewType]) -> list[ReviewType]:
+        """Reject ambiguous duplicate review requirements."""
+        if len(value) != len(set(value)):
+            raise ValueError("required reviews must be unique")
+        return value
+
+
+def default_review_coverage() -> dict[RequirementType, ReviewCoverageRule]:
+    """Return the governed default review coverage by requirement category."""
+    return {
+        RequirementType.BUSINESS: ReviewCoverageRule(
+            required_reviews=[ReviewType.BUSINESS, ReviewType.QA]
+        ),
+        RequirementType.FUNCTIONAL: ReviewCoverageRule(
+            required_reviews=[ReviewType.SYSTEM, ReviewType.BUSINESS, ReviewType.QA]
+        ),
+        RequirementType.NON_FUNCTIONAL: ReviewCoverageRule(
+            required_reviews=[ReviewType.SYSTEM, ReviewType.QA]
+        ),
+        RequirementType.SECURITY: ReviewCoverageRule(
+            required_reviews=[ReviewType.SYSTEM, ReviewType.QA]
+        ),
+        RequirementType.OPERATIONAL: ReviewCoverageRule(
+            required_reviews=[ReviewType.SYSTEM, ReviewType.QA]
+        ),
+    }
+
+
 class FindingStatus(StrEnum):
     """Auditable finding lifecycle; findings are retained instead of deleted."""
 
@@ -183,6 +228,9 @@ class ProjectConfig(StrictModel):
     agents: list[str]
     protected_paths: list[str]
     quality_gates: list[str]
+    review_coverage: dict[RequirementType, ReviewCoverageRule] = Field(
+        default_factory=default_review_coverage
+    )
 
     @field_validator("agents")
     @classmethod
@@ -191,6 +239,14 @@ class ProjectConfig(StrictModel):
         if len(value) != len(set(value)):
             raise ValueError("agent references must be unique")
         return value
+
+    @model_validator(mode="after")
+    def every_requirement_type_has_review_coverage(self) -> ProjectConfig:
+        """Require an explicit review policy for every formal requirement type."""
+        missing = set(RequirementType) - set(self.review_coverage)
+        if missing:
+            raise ValueError("review coverage must define every requirement type")
+        return self
 
 
 class InternetAccess(StrictModel):
@@ -358,7 +414,7 @@ class RequirementItem(StrictModel):
     """One formally identifiable requirement and its acceptance conditions."""
 
     id: str = Field(min_length=1)
-    type: Literal["BUSINESS", "FUNCTIONAL", "NON_FUNCTIONAL", "SECURITY", "OPERATIONAL"]
+    type: RequirementType
     description: str = Field(min_length=1)
     acceptance_criteria: list[str] = Field(min_length=1)
     required: bool = True
@@ -383,9 +439,17 @@ class RequirementsResult(StageResult):
         ids = [requirement.id for requirement in self.requirements]
         if len(ids) != len(set(ids)):
             raise ValueError("requirement IDs must be unique")
-        if self.requirements_source == "STRUCTURED_ISSUE" and not self.human_approved:
-            raise ValueError("structured Issue requirements must be human approved")
         return self
+
+
+class RequirementsApproval(StrictModel):
+    """Human approval bound to the normalized formal-requirements digest."""
+
+    issue_number: int = Field(ge=1)
+    requirements_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved_by: str = Field(min_length=1)
+    approved_at: datetime
+    github_reference: str = Field(min_length=1)
 
 
 class DeploymentConfiguration(StageResult):
@@ -443,6 +507,17 @@ class VerificationCommandResult(StrictModel):
     summary: str = ""
 
 
+class ExecutedTestCase(StrictModel):
+    """One test case parsed by the host from a JUnit XML result."""
+
+    id: str = Field(min_length=1)
+    node_id: str = Field(min_length=1)
+    file: str = Field(min_length=1)
+    status: Literal["PASS", "FAIL", "SKIP", "ERROR"]
+    duration_seconds: float | None = Field(default=None, ge=0)
+    evidence_reference: str = Field(min_length=1)
+
+
 class VerificationResult(StrictModel):
     """Trusted result bound to one exact uncommitted worktree snapshot."""
 
@@ -452,11 +527,28 @@ class VerificationResult(StrictModel):
     changed_files: list[str] = Field(min_length=1)
     commands: list[list[str]] = Field(default_factory=list)
     results: list[VerificationCommandResult] = Field(default_factory=list)
+    executed_test_cases: list[ExecutedTestCase] = Field(default_factory=list)
     overall_status: VerificationStatus
     started_at: datetime
     finished_at: datetime
     commit_sha: str | None = None
     invalidated_reason: str | None = None
+
+
+class RequirementImplementationReference(StrictModel):
+    """Developer-proposed design and implementation files for one requirement."""
+
+    requirement_id: str = Field(min_length=1)
+    design_references: list[str] = Field(default_factory=list)
+    implementation_references: list[str] = Field(default_factory=list)
+
+
+class AcceptanceCriterionTestMapping(StrictModel):
+    """Developer-proposed mapping from one exact criterion to executed test IDs."""
+
+    requirement_id: str = Field(min_length=1)
+    acceptance_criterion: str = Field(min_length=1)
+    test_case_ids: list[str] = Field(min_length=1)
 
 
 class DeveloperResult(StageResult):
@@ -469,6 +561,12 @@ class DeveloperResult(StageResult):
     test_results: list[TestRunResult] = Field(default_factory=list)
     unresolved_finding_ids: list[str] = Field(default_factory=list)
     unresolved_reasons: dict[str, str] = Field(default_factory=dict)
+    requirement_implementations: list[RequirementImplementationReference] = Field(
+        default_factory=list
+    )
+    acceptance_criterion_test_mappings: list[AcceptanceCriterionTestMapping] = Field(
+        default_factory=list
+    )
 
 
 class SystemReviewResult(StageResult):
@@ -477,6 +575,8 @@ class SystemReviewResult(StageResult):
     reviewed_commit_sha: str = ""
     reviewed_pr_number: int | None = Field(default=None, ge=1)
     reviewed_files: list[str] = Field(default_factory=list)
+    evaluated_requirement_ids: list[str] = Field(default_factory=list)
+    excluded_requirement_reasons: dict[str, str] = Field(default_factory=dict)
 
 
 class BusinessReviewResult(StageResult):
@@ -487,6 +587,7 @@ class BusinessReviewResult(StageResult):
     data_as_of: str | None = None
     reviewed_commit_sha: str = ""
     reviewed_pr_number: int | None = Field(default=None, ge=1)
+    excluded_requirement_reasons: dict[str, str] = Field(default_factory=dict)
 
 
 class QaAssessmentResult(StageResult):
@@ -497,16 +598,36 @@ class QaAssessmentResult(StageResult):
     residual_risk_ids: list[str] = Field(default_factory=list)
     reviewed_commit_sha: str = ""
     reviewed_pr_number: int | None = Field(default=None, ge=1)
+    evaluated_requirement_ids: list[str] = Field(default_factory=list)
+    excluded_requirement_reasons: dict[str, str] = Field(default_factory=dict)
 
 
 class TraceabilityRecord(StrictModel):
     """Requirement-to-implementation-and-test trace."""
 
     requirement_id: str = Field(min_length=1)
+    design_references: list[str] = Field(default_factory=list)
     implementation_references: list[str] = Field(default_factory=list)
     test_references: list[str] = Field(default_factory=list)
     acceptance_criteria_test_references: dict[str, list[str]] = Field(default_factory=dict)
-    review_references: list[str] = Field(default_factory=list)
+    review_references: dict[ReviewType, list[str]] = Field(default_factory=dict)
+
+    @field_validator("review_references", mode="before")
+    @classmethod
+    def normalize_legacy_review_references(cls, value: Any) -> Any:
+        """Normalize valid legacy review strings and reject arbitrary evidence text."""
+        if not isinstance(value, list):
+            return value
+        normalized: dict[str, list[str]] = {}
+        review_values = {item.value for item in ReviewType}
+        for reference in value:
+            if not isinstance(reference, str):
+                raise ValueError("review references must be validated strings")
+            parts = reference.split(":", maxsplit=2)
+            if len(parts) != 3 or parts[0] != "review" or parts[1] not in review_values:
+                raise ValueError("review reference format is invalid")
+            normalized.setdefault(parts[1], []).append(reference)
+        return normalized
 
 
 class ResidualRisk(StrictModel):
@@ -524,6 +645,7 @@ class TaskEvidence(StrictModel):
     """Quality evidence persisted as safe structure and references only."""
 
     requirements_result: RequirementsResult | None = None
+    requirements_approval: RequirementsApproval | None = None
     deployment_configuration: DeploymentConfiguration | None = None
     developer_results: list[DeveloperResult] = Field(default_factory=list)
     agent_reported_test_results: list[TestRunResult] = Field(default_factory=list)
@@ -636,6 +758,34 @@ class IssueData(StrictModel):
     body: str
     labels: list[str] = Field(default_factory=list)
     url: str = ""
+
+
+class IssueComment(StrictModel):
+    """GitHub Issue comment metadata used to verify a human requirements approval."""
+
+    body: str
+    author: str = Field(min_length=1)
+    created_at: datetime
+    url: str = Field(min_length=1)
+    author_is_bot: bool = False
+
+
+class SourcePackageFile(StrictModel):
+    """One packaged source entry and its content digest."""
+
+    path: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SourcePackageManifest(StrictModel):
+    """Clean-commit provenance embedded in a formal source package."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    git_status_clean: bool
+    generated_at: datetime
+    files: list[SourcePackageFile]
+    package_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class PullRequestData(StrictModel):

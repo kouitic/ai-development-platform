@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import Protocol
+from typing import Literal, Protocol
+from uuid import uuid4
 
 from ai_dev_platform.domain.models import (
+    ExecutedTestCase,
     TestStatus,
     VerificationCommand,
     VerificationCommandResult,
@@ -35,6 +38,87 @@ class VerificationError(RuntimeError):
     """The host could not establish a trustworthy verification result."""
 
 
+_TEST_STATUS_PRIORITY = {"PASS": 0, "SKIP": 1, "FAIL": 2, "ERROR": 3}
+
+
+def _junit_test_identity(root: Path, testcase: ET.Element) -> tuple[str, str]:
+    raw_file = testcase.get("file", "").replace("\\", "/")
+    classname = testcase.get("classname", "")
+    class_parts: list[str] = []
+    if raw_file:
+        supplied = Path(raw_file)
+        candidate = (supplied if supplied.is_absolute() else root / supplied).resolve(strict=False)
+        try:
+            file_name = candidate.relative_to(root.resolve()).as_posix()
+        except ValueError as exc:
+            raise VerificationError("JUnit test file escapes the repository root") from exc
+        if not candidate.is_file():
+            raise VerificationError("JUnit test file does not exist in the repository")
+    else:
+        parts = [part for part in classname.split(".") if part]
+        file_name = ""
+        for index in range(len(parts), 0, -1):
+            candidate = Path(*parts[:index]).with_suffix(".py")
+            if (root / candidate).is_file():
+                file_name = candidate.as_posix()
+                class_parts = parts[index:]
+                break
+        if not file_name:
+            raise VerificationError("JUnit test file could not be resolved in the repository")
+    name = testcase.get("name", "unknown-test")
+    components = [file_name, *class_parts, name]
+    return file_name, "::".join(component for component in components if component)
+
+
+def parse_junit_test_cases(path: Path, root: Path, run_id: str) -> list[ExecutedTestCase]:
+    """Parse JUnit XML into deduplicated host-trusted test-case evidence."""
+    try:
+        document = ET.parse(path)
+    except (OSError, ET.ParseError) as exc:
+        raise VerificationError("pytest JUnit XML is missing or invalid") from exc
+    merged: dict[str, ExecutedTestCase] = {}
+    for testcase in document.getroot().iter("testcase"):
+        file_name, node_id = _junit_test_identity(root, testcase)
+        status: Literal["PASS", "FAIL", "SKIP", "ERROR"] = (
+            "ERROR"
+            if testcase.find("error") is not None
+            else "FAIL"
+            if testcase.find("failure") is not None
+            else "SKIP"
+            if testcase.find("skipped") is not None
+            else "PASS"
+        )
+        try:
+            duration = float(testcase.get("time", "0"))
+        except ValueError:
+            duration = 0
+        reference_id = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:16]
+        incoming = ExecutedTestCase(
+            id=node_id,
+            node_id=node_id,
+            file=file_name,
+            status=status,
+            duration_seconds=max(0, duration),
+            evidence_reference=f"junit:{run_id}:{reference_id}",
+        )
+        existing = merged.get(node_id)
+        if existing is None:
+            merged[node_id] = incoming
+            continue
+        worst = (
+            incoming
+            if _TEST_STATUS_PRIORITY[incoming.status] > _TEST_STATUS_PRIORITY[existing.status]
+            else existing
+        )
+        merged[node_id] = worst.model_copy(
+            update={
+                "duration_seconds": (existing.duration_seconds or 0)
+                + (incoming.duration_seconds or 0)
+            }
+        )
+    return [merged[key] for key in sorted(merged)]
+
+
 class VerificationRunner(Protocol):
     """Host-side verifier; Agent output is never an implementation of this contract."""
 
@@ -51,6 +135,10 @@ class VerificationRunner(Protocol):
         changed_files: list[str],
         result: VerificationResult,
     ) -> bool: ...
+
+
+def _is_pytest_command(argv: list[str]) -> bool:
+    return any(Path(argument).stem.lower() == "pytest" for argument in argv[:4])
 
 
 def write_verification_result(path: Path, result: VerificationResult) -> Path:
@@ -210,14 +298,19 @@ class LocalVerificationRunner:
     """Execute configured checks as argv arrays and suppress command output from evidence."""
 
     def _command_result(
-        self, root: Path, command: VerificationCommand, policy: CommandPolicy
+        self,
+        root: Path,
+        command: VerificationCommand,
+        policy: CommandPolicy,
+        *,
+        execution_argv: list[str] | None = None,
     ) -> VerificationCommandResult:
         started = monotonic()
         status = TestStatus.FAIL
         exit_code: int | None = None
         summary = "host verification command failed"
         try:
-            argv = list(policy.validate(command.argv))
+            argv = list(policy.validate(execution_argv or command.argv))
             completed = subprocess.run(
                 argv,
                 cwd=root,
@@ -235,7 +328,7 @@ class LocalVerificationRunner:
             pass
         return VerificationCommandResult(
             name=command.name,
-            argv=command.argv,
+            argv=execution_argv or command.argv,
             required=command.required,
             status=status,
             exit_code=exit_code,
@@ -244,6 +337,43 @@ class LocalVerificationRunner:
             summary=summary,
         )
 
+    def _run_commands(
+        self,
+        root: Path,
+        policy: VerificationPolicy,
+        run_id: str,
+    ) -> tuple[list[VerificationCommandResult], list[ExecutedTestCase], list[list[str]]]:
+        command_policy = CommandPolicy(
+            allowed_prefixes=tuple(tuple(command.argv) for command in policy.commands)
+        )
+        results: list[VerificationCommandResult] = []
+        executed_test_cases: list[ExecutedTestCase] = []
+        commands: list[list[str]] = []
+        junit_path = root / ".ai-dev" / "local" / "test-results" / f"{run_id}.xml"
+        for command in policy.commands:
+            execution_argv = list(command.argv)
+            is_pytest = _is_pytest_command(execution_argv)
+            if is_pytest:
+                junit_path.parent.mkdir(parents=True, exist_ok=True)
+                relative_junit = junit_path.relative_to(root).as_posix()
+                execution_argv = [
+                    argument
+                    for argument in execution_argv
+                    if not argument.startswith("--junitxml=")
+                ]
+                execution_argv.append(f"--junitxml={relative_junit}")
+            result = self._command_result(
+                root,
+                command,
+                command_policy,
+                execution_argv=execution_argv,
+            )
+            results.append(result)
+            commands.append(execution_argv)
+            if is_pytest and junit_path.exists():
+                executed_test_cases = parse_junit_test_cases(junit_path, root, run_id)
+        return results, executed_test_cases, commands
+
     def run(
         self,
         root: Path,
@@ -251,14 +381,10 @@ class LocalVerificationRunner:
         policy: VerificationPolicy,
     ) -> VerificationResult:
         root = root.resolve()
+        run_id = f"VERIFY-{uuid4()}"
         started_at = datetime.now(UTC)
         base_sha, before_digest = snapshot_worktree(root, changed_files)
-        command_policy = CommandPolicy(
-            allowed_prefixes=tuple(tuple(command.argv) for command in policy.commands)
-        )
-        results = [
-            self._command_result(root, command, command_policy) for command in policy.commands
-        ]
+        results, executed_test_cases, commands = self._run_commands(root, policy, run_id)
         if policy.secret_scan:
             scan_started = monotonic()
             findings = scan_files(root, [*changed_files, *_REQUIRED_SECURITY_FILES])
@@ -294,11 +420,13 @@ class LocalVerificationRunner:
             else VerificationStatus.PASS
         )
         return VerificationResult(
+            run_id=run_id,
             worktree_digest=before_digest,
             base_commit_sha=base_sha,
             changed_files=sorted({Path(value).as_posix() for value in changed_files}),
-            commands=[command.argv for command in policy.commands],
+            commands=commands,
             results=results,
+            executed_test_cases=executed_test_cases,
             overall_status=overall,
             started_at=started_at,
             finished_at=datetime.now(UTC),
@@ -316,14 +444,10 @@ class LocalVerificationRunner:
     ) -> VerificationResult:
         """Verify an exact clean PR head for ordered CI quality gates."""
         root = root.resolve()
+        run_id = f"VERIFY-{uuid4()}"
         started_at = datetime.now(UTC)
         before_digest = snapshot_commit_range(root, changed_files, base_commit_sha, commit_sha)
-        command_policy = CommandPolicy(
-            allowed_prefixes=tuple(tuple(command.argv) for command in policy.commands)
-        )
-        results = [
-            self._command_result(root, command, command_policy) for command in policy.commands
-        ]
+        results, executed_test_cases, commands = self._run_commands(root, policy, run_id)
         if policy.secret_scan:
             scan_started = monotonic()
             findings = scan_files(root, [*changed_files, *_REQUIRED_SECURITY_FILES])
@@ -364,11 +488,13 @@ class LocalVerificationRunner:
             else VerificationStatus.PASS
         )
         return VerificationResult(
+            run_id=run_id,
             worktree_digest=before_digest,
             base_commit_sha=base_commit_sha,
             changed_files=sorted({Path(value).as_posix() for value in changed_files}),
-            commands=[command.argv for command in policy.commands],
+            commands=commands,
             results=results,
+            executed_test_cases=executed_test_cases,
             overall_status=overall,
             started_at=started_at,
             finished_at=datetime.now(UTC),
@@ -452,6 +578,15 @@ class MockVerificationRunner:
             changed_files=sorted({Path(value).as_posix() for value in changed_files}),
             commands=[command.argv for command in policy.commands],
             results=results,
+            executed_test_cases=[
+                ExecutedTestCase(
+                    id="tests/test_mock.py::test_required_behavior",
+                    node_id="tests/test_mock.py::test_required_behavior",
+                    file="tests/test_mock.py",
+                    status="PASS",
+                    evidence_reference="mock-junit:required-behavior",
+                )
+            ],
             overall_status=overall,
             started_at=started_at,
             finished_at=datetime.now(UTC),

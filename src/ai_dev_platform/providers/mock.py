@@ -105,19 +105,58 @@ class MockAgentProvider:
                     "commit_sha": str(request.context.get("commit_sha", "mock000")),
                 }
             ]
+            requirements = [
+                item
+                for item in request.context.get("requirements", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            raw_changed_files = request.context.get("changed_files", [])
+            changed_files = [
+                str(item.get("path", "")) if isinstance(item, dict) else str(item)
+                for item in raw_changed_files
+            ]
+            changed_files = [item for item in changed_files if item]
+            verified_test_cases = request.context.get("verified_test_cases", [])
+            test_case_ids = [
+                str(item.get("id"))
+                for item in verified_test_cases
+                if isinstance(item, dict) and item.get("id")
+            ] or ["tests/test_mock.py::test_required_behavior"]
             output.update(
                 {
                     "addressed_finding_ids": addressed,
-                    "changed_files": list(request.context.get("changed_files", [])),
+                    "changed_files": changed_files,
                     "change_summary": "Deterministic mock implementation result.",
                     "added_tests": ["mock-required-tests"],
                     "test_results": test_results,
                     "unresolved_finding_ids": [],
                     "unresolved_reasons": {},
+                    "requirement_implementations": [
+                        {
+                            "requirement_id": str(requirement["id"]),
+                            "design_references": ["docs/design/traceability.md#要件対応"],
+                            "implementation_references": changed_files[:1],
+                        }
+                        for requirement in requirements
+                    ],
+                    "acceptance_criterion_test_mappings": [
+                        {
+                            "requirement_id": str(requirement["id"]),
+                            "acceptance_criterion": str(criterion),
+                            "test_case_ids": test_case_ids[:1],
+                        }
+                        for requirement in requirements
+                        for criterion in requirement.get("acceptance_criteria", [])
+                    ],
                 }
             )
         elif schema_title == "SystemReviewResult":
             resolved = self._resolvable_findings(request, "SYSTEM")
+            requirement_ids = [
+                str(item.get("id"))
+                for item in request.context.get("requirements", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
             output.update(
                 {
                     "reviewed_commit_sha": str(request.context.get("commit_sha", "")),
@@ -127,6 +166,8 @@ class MockAgentProvider:
                         for item in request.context.get("changed_files", [])
                         if isinstance(item, dict)
                     ],
+                    "evaluated_requirement_ids": requirement_ids,
+                    "excluded_requirement_reasons": {},
                     "resolved_finding_ids": resolved,
                     "finding_resolution_evidence": {
                         finding_id: ["mock-evidence-1"] for finding_id in resolved
@@ -147,6 +188,7 @@ class MockAgentProvider:
                     "data_as_of": None,
                     "reviewed_commit_sha": str(request.context.get("commit_sha", "")),
                     "reviewed_pr_number": request.context.get("pull_request_number"),
+                    "excluded_requirement_reasons": {},
                     "resolved_finding_ids": resolved,
                     "finding_resolution_evidence": {
                         finding_id: ["mock-evidence-1"] for finding_id in resolved
@@ -155,6 +197,11 @@ class MockAgentProvider:
             )
         elif schema_title == "QaAssessmentResult":
             resolved = self._resolvable_findings(request, "QA")
+            requirement_ids = [
+                str(item.get("id"))
+                for item in request.context.get("requirements", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
             output.update(
                 {
                     "reviewed_evidence_ids": ["mock-evidence-1"],
@@ -162,6 +209,8 @@ class MockAgentProvider:
                     "residual_risk_ids": [],
                     "reviewed_commit_sha": str(request.context.get("commit_sha", "")),
                     "reviewed_pr_number": request.context.get("pull_request_number"),
+                    "evaluated_requirement_ids": requirement_ids,
+                    "excluded_requirement_reasons": {},
                     "resolved_finding_ids": resolved,
                     "finding_resolution_evidence": {
                         finding_id: ["mock-evidence-1"] for finding_id in resolved

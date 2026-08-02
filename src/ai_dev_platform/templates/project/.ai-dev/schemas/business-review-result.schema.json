@@ -1,1 +1,11 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"BusinessReviewResult","allOf":[{"$ref":"stage-result.schema.json"},{"type":"object","required":["evaluated_requirement_ids","source_references"]}]}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BusinessReviewResult",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {"type": "object", "required": ["evaluated_requirement_ids", "source_references", "excluded_requirement_reasons"], "properties": {
+      "evaluated_requirement_ids": {"type": "array", "items": {"type": "string"}},
+      "excluded_requirement_reasons": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
+    }}
+  ]
+}

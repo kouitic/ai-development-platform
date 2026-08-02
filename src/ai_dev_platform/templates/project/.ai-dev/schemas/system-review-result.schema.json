@@ -1,1 +1,11 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SystemReviewResult","allOf":[{"$ref":"stage-result.schema.json"},{"type":"object","required":["reviewed_commit_sha","reviewed_files"]}]}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SystemReviewResult",
+  "allOf": [
+    {"$ref": "stage-result.schema.json"},
+    {"type": "object", "required": ["reviewed_commit_sha", "reviewed_files", "evaluated_requirement_ids", "excluded_requirement_reasons"], "properties": {
+      "evaluated_requirement_ids": {"type": "array", "items": {"type": "string"}},
+      "excluded_requirement_reasons": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
+    }}
+  ]
+}

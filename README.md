@@ -21,7 +21,7 @@ AIは品質証拠を収集し、基準を満たした場合に「定義された
 - 最大3回の差戻し、予算上限、人間承認待ち
 - SQLite状態・監査・承認、工程境界停止、再開
 - GitHub Issue/PR/diff/files/comment/label/Check GatewayとGitHub Flowテンプレート
-- stage別Schema、要件ID・受入条件単位のTraceability、TaskEvidence、Finding lifecycle、QA証拠統合
+- stage別Schema、要件ID・設計・実装・JUnit test case・受入条件・必須Reviewを結ぶホスト検証済みTraceability、TaskEvidence、Finding lifecycle、QA証拠統合
 - AI変更後のworktree digestへ結び付いたホストVerification成功後だけcommit→作業branch push→PRを行うGit Gateway
 - Secret、本番相当データ、保護パス、argv、networkの実行時Policy
 - CI→system→business→QAを同一PR head SHAで一度ずつ実行する統合GitHub Actions、CODEOWNERS、pre-commit雛形
@@ -82,7 +82,7 @@ uv run ai-dev run --issue 1 --commit-sha <対象コミットSHA>
 uv run ai-dev status --issue 1
 ```
 
-Issue Formの構造化YAML要件は人間作成の正式要件として扱います。自然言語IssueからAIが生成した要件候補は`REQUIREMENTS_APPROVAL_REQUIRED`で停止し、Issue・`requirements`工程・commit SHAに結び付いた人間承認後だけ正式要件になります。その後、未確定のデプロイ・環境構成があれば停止します。
+Issue Formの構造化YAMLは正式要件の候補ですが、それだけでは承認済みになりません。正規化した要件digestと一致する人間のGitHub承認コメントがある場合だけ承認済みとし、Issue本文の変更でdigestが変われば再承認まで停止します。自然言語IssueからAIが生成した要件候補も同じく`REQUIREMENTS_APPROVAL_REQUIRED`で停止します。その後、未確定のデプロイ・環境構成があれば停止します。
 
 ```powershell
 uv run ai-dev approve --issue 1 --stage requirements --commit-sha <対象コミットSHA> --approver <承認者>
@@ -107,9 +107,9 @@ uv run ai-dev approve --issue 1 --stage human-approval --commit-sha <対象コ�
 uv run ai-dev quality-gates --issue 1 --pr 2 --base-sha <PR base SHA> --head-sha <PR head SHA>
 ```
 
-単独の`review`・`qa`は診断用に残しています。実GitHubで使用する場合は、`verify-commit`が生成したdigest付き`--verification-result`が必須です。Agentの`test_results`やCLI真偽値は信頼証拠として受け付けません。
+単独の`review`・`qa`は診断用に残しています。実GitHubで使用する場合は、`verify-commit`が生成したdigest付き`--verification-result`が必須です。pytestにはホスト管理の`--junitxml`を付与し、実行されたtest caseを取得します。Agentは要件と設計・実装・pytest node IDの対応候補を提示できますが、対象commitに存在するファイルと実行済みPASS testだけが正式証拠になります。Verification全体のPASSだけで全受入条件を満たしたことにはしません。
 
-`package-source`で生成し、`verify-source-package`で検査したZIPだけを正式提出物とします。既存ファイルは上書きせず、source/config/template/test/docsだけを含め、`.venv`、cache、build、coverage、egg-info、過去の`*.zip`を拒否します。CIはPython 3.12・3.13の両方でMock-only frozen installと品質検査を行い、3.12 jobが正式ZIPをArtifactとして生成します。
+`package-source`で生成し、`verify-source-package`で検査したZIPだけを正式提出物とします。正式生成にはcleanなGit状態を必須とし、commit SHA、生成時刻、全収録ファイルのSHA-256、package digestを`source-package-manifest.json`へ記録します。既存ファイルは上書きせず、source/config/template/test/docsだけを含め、`.git`、`.venv`、cache、build、coverage、egg-info、過去の`*.zip`を拒否します。CIはPython 3.12・3.13の両方でMock-only frozen installと品質検査を行い、3.12 jobが正式ZIPをArtifactとして生成します。
 
 ```powershell
 uv run ai-dev package-source --output ai-development-platform-source.zip

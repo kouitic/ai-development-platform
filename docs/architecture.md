@@ -6,7 +6,7 @@
 
 Git変更は、許可パスと保護パス確認、変更ファイル・diff digest取得、ホストVerification PASS、対象不変確認、commit、検証結果とcommit SHAの関連付け、作業ブランチpush、PR作成の順序を専用Gatewayが強制する。AI自己申告テストは`agent_reported_test_results`、ホスト証拠は`trusted_verification_results`として分離する。main push、force push、merge、reset hard、clean、PR mergeは公開APIに存在しないか実行時に拒否する。
 
-品質結果は要件、デプロイ、開発、システムレビュー、業務レビュー、QAの個別Schemaで検証し、SQLiteには安全な集計と参照IDだけを保存する。正式要件は`RequirementItem`のIDで管理し、各必須要件について実装参照、各受入条件のテスト参照、レビュー参照が揃わなければQAを起動しない。AI生成要件は`REQUIREMENTS_APPROVAL_REQUIRED`、QAの条件付き合格は`QA_CONDITIONAL_APPROVAL_REQUIRED`、未確定の環境構成は`DEPLOYMENT_CONFIGURATION_REQUIRED`で停止する。
+品質結果は要件、デプロイ、開発、システムレビュー、業務レビュー、QAの個別Schemaで検証し、SQLiteには安全な集計と参照IDだけを保存する。正式要件は`RequirementItem`のIDで管理する。Developer AIの設計・実装・test case対応は候補として受け取り、リポジトリ内の実在パス、保護パス承認、対象commitのファイル、JUnitに存在するPASS test caseをホスト側で検証してから`TraceabilityRecord`へ昇格する。Verification全体の成功から全要件の証拠を自動生成しない。各必須要件について設計参照、実装参照、各受入条件の実行済みPASS test、要件種別ごとの必須Reviewが揃わなければQAを起動しない。AI生成要件は`REQUIREMENTS_APPROVAL_REQUIRED`、QAの条件付き合格は`QA_CONDITIONAL_APPROVAL_REQUIRED`、未確定の環境構成は`DEPLOYMENT_CONFIGURATION_REQUIRED`で停止する。
 
 Claude Agent SDKにはtool permission callbackとsandbox設定を渡す。ファイルは実体パスへ正規化し、リポジトリ外、symlink回避、資格情報、未許可書込みを拒否する。SDKのshell toolは文字列契約であるため使用を拒否し、ホスト側の安全なGit・テストAPIへ分離する。Webはallowlistまたはread-only判定を通し、送信・認証・実行・機密データ送信を許可しない。
 
@@ -71,6 +71,8 @@ NEW → REQUIREMENTS_ANALYSIS → DEPLOYMENT_CONFIGURATION → PLANNING
 
 `AUTOMATED_TESTING`はAgent stageではない。Developer AIはテスト追加、失敗原因分析、修正を担当し、実行と成否判定はVerificationRunnerがargv配列で行う。検証後にdiff、変更ファイル、基準SHAが変われば結果を`INVALIDATED`にする。
 
+pytest実行時はVerificationRunnerが一意な`--junitxml=.ai-dev/local/test-results/<run-id>.xml`を付与する。JUnit XMLはホストが解析し、node ID、file、PASS/FAIL/SKIP/ERROR、所要時間、証拠参照を`ExecutedTestCase`として対象commitの`VerificationResult`へ保存する。重複node IDは最悪の結果を採用し、未実行、SKIP、FAIL、ERRORを受入条件の成功証拠にしない。
+
 Local VerificationのSecret検査は変更ファイルと必須設定ファイルを明示パスで高速走査する。生成物ディレクトリの全tree走査は行わない。一方、CIはgitleaksでGit履歴と追跡対象全体を検査し、tree除外配下に追跡されたファイルも対象にする。
 
 ## 6. GitHub連携
@@ -101,7 +103,15 @@ Local VerificationのSecret検査は変更ファイルと必須設定ファイ�
 
 ## 10. 承認管理
 
-承認は`issue_number`、`stage`、`commit_sha`、`approver`、`approved_at`を持つ。対象SHAが変われば無効になる。曖昧な自然言語は承認レコードに変換しない。mainマージ、本番操作、ロールバックはCLIの情報提供対象にはできるが、自動実行経路はMVPに設けない。
+承認は`issue_number`、`stage`、`commit_sha`、`approver`、`approved_at`を持つ。要件承認はさらに、要件ID・種別・説明・受入条件・必須性を正規化したSHA-256 digestとGitHubコメント参照を`RequirementsApproval`へ保持する。構造化Issueだけでは承認済みにせず、botではないGitHub投稿者による所定形式のコメントと現在digestが一致する場合だけ有効とする。Issue変更、対象SHA変更、後続の却下で無効になる。曖昧な自然言語は承認レコードに変換しない。mainマージ、本番操作、ロールバックはCLIの情報提供対象にはできるが、自動実行経路はMVPに設けない。
+
+## 10.1 Review Coverage Policy
+
+`ProjectConfig.review_coverage`はBUSINESS、FUNCTIONAL、NON_FUNCTIONAL、SECURITY、OPERATIONALごとにSYSTEM、BUSINESS、QAの必須組合せを定義する。各Review結果は`evaluated_requirement_ids`と`excluded_requirement_reasons`を返す。ホストは未知・重複ID、必須対象の欠落、理由のない対象外を拒否し、`review:<type>:<run-id>`を実際に評価した要件だけへ登録する。
+
+## 10.2 正式Source Package
+
+正式Source ZIPはcleanなGit commitからだけ生成する。`source-package-manifest.json`にcommit SHA、clean判定、生成時刻、各source fileのSHA-256、正規化ファイル一覧のpackage digestを格納し、検証時にZIP内のパス、重複、symlink、禁止物、ファイルhash、digestを再計算する。`.git`、`.venv`、過去ZIP、cache、build生成物は収録しない。
 
 ## 11. 監査ログ
 

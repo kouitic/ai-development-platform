@@ -10,13 +10,26 @@ from ai_dev_platform.application.quality_artifacts import (
     read_quality_artifact,
     write_quality_artifact,
 )
-from ai_dev_platform.application.requirements import parse_structured_issue_requirements
+from ai_dev_platform.application.requirements import (
+    find_requirements_approval,
+    parse_structured_issue_requirements,
+    requirements_digest,
+)
+from ai_dev_platform.application.traceability import (
+    assert_references_exist_at_commit,
+    build_validated_traceability,
+)
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig
 from ai_dev_platform.domain.models import (
+    AgentRequest,
+    AgentRunStatus,
     Decision,
+    DeveloperResult,
     EvidenceReference,
     IssueData,
+    RequirementItem,
+    RequirementsApproval,
     RequirementsResult,
     ReviewType,
     TaskEvidence,
@@ -32,20 +45,21 @@ from ai_dev_platform.providers.base import AgentProvider
 from ai_dev_platform.security.scanner import scan_tree
 
 
-def _bootstrap_evidence(issue: IssueData, verification: VerificationResult) -> TaskEvidence:
+def _bootstrap_evidence(
+    issue: IssueData,
+    verification: VerificationResult,
+    requirement_items: list[RequirementItem],
+    approval: RequirementsApproval,
+) -> TaskEvidence:
     issue_reference = EvidenceReference(
         id="github-issue-requirements",
         kind="github",
         reference="github:issue-body",
-        safe_summary="Requirements sourced from the target Issue.",
-    )
-    requirement_items = parse_structured_issue_requirements(
-        issue.body,
-        source_reference=issue.url or f"github:issue:{issue.number}",
+        safe_summary="対象Issueから取得した承認済み要件です。",
     )
     requirements = RequirementsResult(
         decision=Decision.PASS,
-        summary="Human-authored structured requirements were collected from the target Issue.",
+        summary="対象Issueの構造化要件と人間によるdigest承認を確認しました。",
         evidence=[issue_reference],
         requirements=requirement_items,
         business_requirements=[
@@ -54,24 +68,16 @@ def _bootstrap_evidence(issue: IssueData, verification: VerificationResult) -> T
         acceptance_criteria=[
             criterion for item in requirement_items for criterion in item.acceptance_criteria
         ],
-        scope=["Target Issue and Pull Request"],
+        scope=["対象IssueおよびPull Request"],
         requirements_source="STRUCTURED_ISSUE",
         human_approved=True,
     )
     return TaskEvidence(
         requirements_result=requirements,
+        requirements_approval=approval,
         trusted_verification_results=[verification],
         traceability=[
-            TraceabilityRecord(
-                requirement_id=requirement.id,
-                implementation_references=[f"commit:{verification.commit_sha}"],
-                test_references=[f"verification:{verification.run_id}"],
-                acceptance_criteria_test_references={
-                    criterion: [f"verification:{verification.run_id}"]
-                    for criterion in requirement.acceptance_criteria
-                },
-            )
-            for requirement in requirement_items
+            TraceabilityRecord(requirement_id=requirement.id) for requirement in requirement_items
         ],
     )
 
@@ -106,6 +112,17 @@ def prepare_quality_task(
 ) -> TaskRecord:
     """Collect exact targets and accept only trusted, SHA-bound host verification."""
     issue = github.get_issue(issue_number)
+    requirement_items = parse_structured_issue_requirements(
+        issue.body,
+        source_reference=issue.url or f"github:issue:{issue.number}",
+    )
+    requirements_approval = find_requirements_approval(
+        issue.number,
+        requirement_items,
+        github.get_issue_comments(issue.number),
+    )
+    if requirements_approval is None:
+        raise ValueError("formal requirements approval is missing or stale")
     pull_request = github.get_pull_request(pull_request_number)
     if pull_request.base_branch == pull_request.head_branch:
         raise ValueError("Pull Request head and base branches must differ")
@@ -137,10 +154,26 @@ def prepare_quality_task(
                         "labels": issue.labels,
                     }
                 },
-                evidence=_bootstrap_evidence(issue, verification),
+                evidence=_bootstrap_evidence(
+                    issue,
+                    verification,
+                    requirement_items,
+                    requirements_approval,
+                ),
             )
         )
     else:
+        persisted_requirements = task.evidence.requirements_result
+        persisted_approval = task.evidence.requirements_approval
+        current_digest = requirements_digest(requirement_items)
+        if (
+            persisted_requirements is None
+            or persisted_approval is None
+            or requirements_digest(persisted_requirements.requirements) != current_digest
+            or persisted_approval.requirements_digest != current_digest
+            or requirements_approval.requirements_digest != current_digest
+        ):
+            raise ValueError("persisted quality state belongs to another requirements digest")
         if task.pull_request_number != pull_request_number:
             raise ValueError("persisted quality state belongs to another Pull Request")
         if task.commit_sha != pull_request.head_sha:
@@ -154,6 +187,85 @@ def prepare_quality_task(
             changed_files=changed_files,
         )
     return task
+
+
+async def _collect_host_validated_traceability(
+    loaded: LoadedConfig,
+    provider: AgentProvider,
+    store: SQLiteStateStore,
+    root: Path,
+    task: TaskRecord,
+    verification: VerificationResult,
+) -> TaskRecord:
+    """Ask the developer role for mappings, then trust only host-validated references."""
+    requirements = task.evidence.requirements_result
+    definition = loaded.agents.get("developer")
+    if requirements is None or definition is None:
+        raise ValueError("developer traceability collection is not configured")
+    request = AgentRequest(
+        agent_id=definition.id,
+        prompt=(
+            "承認済み要件について、既存の設計文書・対象commitの実装ファイル・"
+            "ホスト実行済みテストケースの対応だけを報告してください。ファイルは変更しません。"
+        ),
+        system_prompt=definition.system_prompt,
+        context={
+            "issue_number": task.issue_number,
+            "commit_sha": task.commit_sha,
+            "requirements": [item.model_dump(mode="json") for item in requirements.requirements],
+            "changed_files": verification.changed_files,
+            "verified_test_cases": [
+                item.model_dump(mode="json") for item in verification.executed_test_cases
+            ],
+            "traceability_collection_only": True,
+        },
+        model=definition.model,
+        max_turns=min(definition.max_turns, loaded.project.workflow.max_agent_turns),
+        timeout_seconds=loaded.project.workflow.timeout_minutes * 60,
+        max_budget_usd=loaded.project.budget.per_task.stop_usd,
+        allowed_tools=[
+            tool for tool in definition.available_tools if tool in {"Read", "Glob", "Grep"}
+        ],
+        forbidden_tools=list(dict.fromkeys([*definition.forbidden_tools, "Write", "Edit"])),
+        working_directory=str(root.resolve()),
+        readable_paths=definition.readable_paths,
+        writable_paths=[],
+        protected_paths=definition.protected_paths,
+        internet_access=definition.internet_access,
+        output_schema=DeveloperResult.model_json_schema(),
+    )
+    provider_result = await provider.execute(request)
+    if provider_result.status != AgentRunStatus.SUCCESS:
+        raise ValueError("developer traceability collection failed")
+    developer_result = DeveloperResult.model_validate(provider_result.output)
+    if sorted(developer_result.changed_files) != sorted(verification.changed_files):
+        raise ValueError("developer traceability files do not match trusted verification")
+    traces = build_validated_traceability(
+        root.resolve(),
+        requirements,
+        developer_result,
+        verification,
+        protected_patterns=loaded.project.protected_paths,
+        protected_path_approved=False,
+    )
+    assert_references_exist_at_commit(root.resolve(), traces, task.commit_sha)
+    evidence = task.evidence.model_copy(deep=True)
+    evidence.developer_results.append(developer_result)
+    evidence.agent_reported_test_results.extend(developer_result.test_results)
+    evidence.traceability = traces
+    updated = store.save_task(task.model_copy(update={"evidence": evidence}))
+    store.append_event(
+        task.task_id,
+        "developer",
+        "traceability_collected",
+        "success",
+        {
+            "commit_sha": task.commit_sha,
+            "requirement_count": len(traces),
+            "verification_run_id": verification.run_id,
+        },
+    )
+    return updated
 
 
 def run_quality_gate(
@@ -178,6 +290,17 @@ def run_quality_gate(
         stage=stage,
         verification=verification,
     )
+    if stage == WorkflowState.SYSTEM_REVIEW and not task.evidence.developer_results:
+        task = asyncio.run(
+            _collect_host_validated_traceability(
+                loaded,
+                provider,
+                store,
+                root,
+                task,
+                verification,
+            )
+        )
     runner = WorkflowRunner(
         loaded.project,
         loaded.agents,

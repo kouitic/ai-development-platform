@@ -3,11 +3,13 @@
   "title": "QaAssessmentResult",
   "allOf": [
     {"$ref": "stage-result.schema.json"},
-    {"type": "object", "required": ["reviewed_evidence_ids", "contradictions", "residual_risk_ids"], "properties": {
+    {"type": "object", "required": ["reviewed_evidence_ids", "contradictions", "residual_risk_ids", "evaluated_requirement_ids", "excluded_requirement_reasons"], "properties": {
       "reviewed_evidence_ids": {"type": "array", "items": {"type": "string"}},
       "contradictions": {"type": "array", "items": {"type": "string"}},
       "residual_risk_ids": {"type": "array", "items": {"type": "string"}},
-      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1}
+      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1},
+      "evaluated_requirement_ids": {"type": "array", "items": {"type": "string"}},
+      "excluded_requirement_reasons": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
     }}
   ]
 }

@@ -50,3 +50,14 @@ quality_gates:
   - business-review
   - qa-assessment
   - human-approval
+review_coverage:
+  BUSINESS:
+    required_reviews: [BUSINESS, QA]
+  FUNCTIONAL:
+    required_reviews: [SYSTEM, BUSINESS, QA]
+  NON_FUNCTIONAL:
+    required_reviews: [SYSTEM, QA]
+  SECURITY:
+    required_reviews: [SYSTEM, QA]
+  OPERATIONAL:
+    required_reviews: [SYSTEM, QA]

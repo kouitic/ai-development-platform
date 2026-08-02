@@ -4,6 +4,10 @@ from pathlib import Path
 import pytest
 
 from ai_dev_platform.application.approval_service import REQUIREMENTS_STAGE, record_decision
+from ai_dev_platform.application.requirements import (
+    parse_structured_issue_requirements,
+    requirements_digest,
+)
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
@@ -116,6 +120,14 @@ def setup_runner(
         "body": STRUCTURED_REQUIREMENTS,
         "labels": [],
     }
+    formal_requirements = parse_structured_issue_requirements(
+        STRUCTURED_REQUIREMENTS,
+        source_reference=f"mock://issues/{issue}",
+    )
+    github.add_issue_comment(
+        issue,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(formal_requirements)}",
+    )
     git = MockGitWorktree(branch=branch, files=["src/example.py"], diff_text="mock diff")
     selected = provider or MockAgentProvider()
     runner = WorkflowRunner(
@@ -175,6 +187,21 @@ def test_ai_requirement_candidates_wait_for_formal_human_approval(
 
     finished = asyncio.run(runner.run(task.task_id))
     assert finished.state == WorkflowState.HUMAN_APPROVAL_REQUIRED
+
+
+def test_structured_issue_alone_waits_for_formal_human_approval(
+    initialized_project: Path,
+) -> None:
+    runner, _, task, _ = setup_runner(initialized_project, issue=92)
+    assert isinstance(runner.github, MockGitHubGateway)
+    runner.github.issue_comment_records[92] = []
+
+    waiting = asyncio.run(runner.run(task.task_id))
+
+    assert waiting.state == WorkflowState.REQUIREMENTS_APPROVAL_REQUIRED
+    assert waiting.evidence.requirements_result is not None
+    assert not waiting.evidence.requirements_result.human_approved
+    assert waiting.evidence.requirements_approval is None
 
 
 def test_missing_deployment_answers_stop_before_design(initialized_project: Path) -> None:

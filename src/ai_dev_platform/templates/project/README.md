@@ -15,9 +15,9 @@ ai-dev run --issue <number>
 
 Linux/macOSでも同じ`ai-dev`コマンドを利用できます。
 
-Issue Formの構造化YAMLは正式要件です。自然言語からAIが生成した候補は`REQUIREMENTS_APPROVAL_REQUIRED`で停止し、`approve --stage requirements`による人間承認後だけ利用します。その後、デプロイ・環境構成の人間回答待ちで停止します。mainへのマージ、本番デプロイ、本番データ変更はAIが自動実行しません。Secretと本番相当データをGitへ追加しないでください。
+Issue Formの構造化YAMLも、要件digestと一致する正式な人間のGitHub承認コメントがあるまで要件候補です。自然言語からAIが生成した候補と同様に`REQUIREMENTS_APPROVAL_REQUIRED`で停止し、`approve --stage requirements`による人間承認後だけ利用します。Issue変更でdigestが変われば再承認が必要です。その後、デプロイ・環境構成の人間回答待ちで停止します。mainへのマージ、本番デプロイ、本番データ変更はAIが自動実行しません。Secretと本番相当データをGitへ追加しないでください。
 
-AI変更後のテスト、lint、型検査、依存監査、Secret scanは`.ai-dev/policies/verification.yaml`に従ってホスト側が実行します。Agentの自己申告結果だけではcommitしません。正式なPR品質ゲートは`.github/workflows/ai-quality-gates.yml`でCI→System→Business→QAの順に実行します。
+AI変更後のテスト、lint、型検査、依存監査、Secret scanは`.ai-dev/policies/verification.yaml`に従ってホスト側が実行します。pytest JUnitから取得した実行済みPASS test caseだけを受入条件の証拠にでき、Verification全体のPASSやAgentの自己申告だけでは要件充足にもcommitにも使いません。正式なPR品質ゲートは`.github/workflows/ai-quality-gates.yml`でCI→System→Business→QAの順に実行します。
 
 正式提出物は次の手順で生成・検査したZIPだけです。
 
@@ -26,6 +26,6 @@ ai-dev package-source --output {{ project_name }}-source.zip
 ai-dev verify-source-package --archive {{ project_name }}-source.zip
 ```
 
-過去のZIP、仮想環境、cache、build、coverage、egg-infoは新しいSource Packageへ含まれません。
+cleanなGit commitからだけ生成でき、manifestのcommit SHA、全file hash、package digestを検証します。`.git`、過去のZIP、仮想環境、cache、build、coverage、egg-infoは新しいSource Packageへ含まれません。
 
 このリポジトリはPrivate useを前提とし、ライセンスは未選択です。外部公開前に依存ライセンスと配布条件を再確認してください。

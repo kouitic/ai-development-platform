@@ -9,7 +9,15 @@ from ai_dev_platform.application.quality_artifacts import (
     QualityArtifactError,
     read_quality_artifact,
 )
-from ai_dev_platform.application.quality_gate import run_integrated_quality_gates
+from ai_dev_platform.application.quality_gate import (
+    _assert_verification_target,
+    prepare_quality_task,
+    run_integrated_quality_gates,
+)
+from ai_dev_platform.application.requirements import (
+    parse_structured_issue_requirements,
+    requirements_digest,
+)
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
@@ -17,6 +25,7 @@ from ai_dev_platform.domain.models import (
     Decision,
     DeveloperResult,
     EvidenceReference,
+    ExecutedTestCase,
     PullRequestData,
     ReviewType,
     TaskEvidence,
@@ -97,11 +106,48 @@ def _trusted_result(commit_sha: str, files: list[str], diff: str) -> Verificatio
                 evidence_reference="verification:required",
             )
         ],
+        executed_test_cases=[
+            ExecutedTestCase(
+                id="tests/test_mock.py::test_required_behavior",
+                node_id="tests/test_mock.py::test_required_behavior",
+                file="tests/test_mock.py",
+                status="PASS",
+                evidence_reference="junit:trusted:required-behavior",
+            )
+        ],
         overall_status=VerificationStatus.PASS,
         started_at=now,
         finished_at=now,
         commit_sha=commit_sha,
     )
+
+
+def test_quality_gate_rejects_untrusted_verification_target_variants() -> None:
+    result = _trusted_result("a" * 40, ["src/app.py"], "diff")
+    with pytest.raises(ValueError, match="did not pass"):
+        _assert_verification_target(
+            result.model_copy(update={"overall_status": VerificationStatus.FAIL}),
+            commit_sha="a" * 40,
+            changed_files=["src/app.py"],
+        )
+    with pytest.raises(ValueError, match="commit does not match"):
+        _assert_verification_target(
+            result,
+            commit_sha="c" * 40,
+            changed_files=["src/app.py"],
+        )
+    with pytest.raises(ValueError, match="files do not match"):
+        _assert_verification_target(
+            result,
+            commit_sha="a" * 40,
+            changed_files=["src/other.py"],
+        )
+    with pytest.raises(ValueError, match="failed or missing"):
+        _assert_verification_target(
+            result.model_copy(update={"results": []}),
+            commit_sha="a" * 40,
+            changed_files=["src/app.py"],
+        )
 
 
 def test_local_verification_is_bound_to_post_change_snapshot(tmp_path: Path) -> None:
@@ -290,6 +336,15 @@ requirements:
     ).model_dump(mode="json")
     gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
     gateway.pull_request_diffs[7] = "reviewed diff"
+    (initialized_project / "src").mkdir(exist_ok=True)
+    (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    requirement_items = parse_structured_issue_requirements(
+        str(gateway.issues[41]["body"]), source_reference="mock://issues/41"
+    )
+    gateway.add_issue_comment(
+        41,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirement_items)}",
+    )
     verification = _trusted_result("a" * 40, ["src/app.py"], "reviewed diff")
     provider = MockAgentProvider()
     artifact_dir = initialized_project / ".ai-dev" / "local" / "artifacts"
@@ -307,6 +362,7 @@ requirements:
     )
     assert finished.state == WorkflowState.HUMAN_APPROVAL_REQUIRED
     assert [request.agent_id for request in provider.requests] == [
+        "developer",
         "system-reviewer",
         "business-reviewer",
         "qa",
@@ -325,6 +381,28 @@ requirements:
             finished.evidence.qa_assessments[-1],
         ]
     )
+    changed_body = str(gateway.issues[41]["body"]).replace(
+        "Trusted verification passes",
+        "Trusted verification and traceability pass",
+    )
+    gateway.update_issue(41, changed_body)
+    changed_requirements = parse_structured_issue_requirements(
+        changed_body, source_reference="mock://issues/41"
+    )
+    gateway.add_issue_comment(
+        41,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(changed_requirements)}",
+    )
+    with pytest.raises(ValueError, match="another requirements digest"):
+        prepare_quality_task(
+            store,
+            gateway,
+            initialized_project,
+            issue_number=41,
+            pull_request_number=7,
+            stage=WorkflowState.QA_ASSESSMENT,
+            verification=verification,
+        )
     system_path = artifact_dir / "system-review.json"
     with pytest.raises(QualityArtifactError, match="commit SHA mismatch"):
         read_quality_artifact(

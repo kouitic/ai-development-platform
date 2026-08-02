@@ -940,7 +940,7 @@ def package_source_command(
     output: Annotated[Path | None, typer.Option("--output")] = None,
     path: Annotated[Path, typer.Option("--path")] = Path("."),
 ) -> None:
-    """Create a deterministic source-only ZIP without caches or build products."""
+    """Create a manifest-bound source ZIP from a clean Git commit."""
     try:
         destination = package_source(_root(path), output)
     except (FileExistsError, ValueError) as exc:
@@ -953,7 +953,7 @@ def package_source_command(
 def verify_source_package_command(
     archive: Annotated[Path, typer.Option("--archive")],
 ) -> None:
-    """Verify that a formal source ZIP contains only allowed source material."""
+    """Verify source paths, file hashes, clean provenance, and package digest."""
     try:
         entries = verify_source_package(archive)
     except ValueError as exc:

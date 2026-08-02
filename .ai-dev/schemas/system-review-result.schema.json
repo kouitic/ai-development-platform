@@ -3,8 +3,10 @@
   "title": "SystemReviewResult",
   "allOf": [
     {"$ref": "stage-result.schema.json"},
-    {"type": "object", "required": ["reviewed_commit_sha", "reviewed_files"], "properties": {
-      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1}, "reviewed_files": {"type": "array", "items": {"type": "string"}}
+    {"type": "object", "required": ["reviewed_commit_sha", "reviewed_files", "evaluated_requirement_ids", "excluded_requirement_reasons"], "properties": {
+      "reviewed_commit_sha": {"type": "string"}, "reviewed_pr_number": {"type": ["integer", "null"], "minimum": 1}, "reviewed_files": {"type": "array", "items": {"type": "string"}},
+      "evaluated_requirement_ids": {"type": "array", "items": {"type": "string"}},
+      "excluded_requirement_reasons": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
     }}
   ]
 }

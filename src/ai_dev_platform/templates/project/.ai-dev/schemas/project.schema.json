@@ -3,7 +3,7 @@
   "$id": "https://example.invalid/ai-dev/project.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "project", "provider", "interaction", "workflow", "budget", "task_execution", "github", "agents", "protected_paths", "quality_gates"],
+  "required": ["schema_version", "project", "provider", "interaction", "workflow", "budget", "task_execution", "github", "agents", "protected_paths", "quality_gates", "review_coverage"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "project": {"type": "object", "additionalProperties": false, "required": ["name", "description"], "properties": {"name": {"type": "string", "minLength": 1}, "description": {"type": "string"}}},
@@ -15,6 +15,33 @@
     "github": {"type": "object"},
     "agents": {"type": "array", "minItems": 5, "uniqueItems": true, "items": {"type": "string"}},
     "protected_paths": {"type": "array", "items": {"type": "string"}},
-    "quality_gates": {"type": "array", "items": {"type": "string"}}
+    "quality_gates": {"type": "array", "items": {"type": "string"}},
+    "review_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["BUSINESS", "FUNCTIONAL", "NON_FUNCTIONAL", "SECURITY", "OPERATIONAL"],
+      "properties": {
+        "BUSINESS": {"$ref": "#/$defs/reviewCoverageRule"},
+        "FUNCTIONAL": {"$ref": "#/$defs/reviewCoverageRule"},
+        "NON_FUNCTIONAL": {"$ref": "#/$defs/reviewCoverageRule"},
+        "SECURITY": {"$ref": "#/$defs/reviewCoverageRule"},
+        "OPERATIONAL": {"$ref": "#/$defs/reviewCoverageRule"}
+      }
+    }
+  },
+  "$defs": {
+    "reviewCoverageRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_reviews"],
+      "properties": {
+        "required_reviews": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["SYSTEM", "BUSINESS", "QA"]}
+        }
+      }
+    }
   }
 }

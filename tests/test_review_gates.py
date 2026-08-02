@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_dev_platform.application.requirements import requirements_digest
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
@@ -13,11 +14,13 @@ from ai_dev_platform.domain.models import (
     Decision,
     DeveloperResult,
     EvidenceReference,
+    ExecutedTestCase,
     Finding,
     FindingSeverity,
     FindingStatus,
     QaAssessmentResult,
     RequirementItem,
+    RequirementsApproval,
     RequirementsResult,
     ReviewCondition,
     ReviewType,
@@ -54,6 +57,15 @@ def trusted_verification(commit_sha: str = "a" * 40) -> VerificationResult:
                 status=RunStatus.PASS,
                 exit_code=0,
                 evidence_reference="verification:required",
+            )
+        ],
+        executed_test_cases=[
+            ExecutedTestCase(
+                id="tests/test_mock.py::test_required_behavior",
+                node_id="tests/test_mock.py::test_required_behavior",
+                file="tests/test_mock.py",
+                status="PASS",
+                evidence_reference="junit:trusted:required-behavior",
             )
         ],
         overall_status=VerificationStatus.PASS,
@@ -94,7 +106,27 @@ def system_output(
         conditions=conditions or [],
         reviewed_commit_sha="a" * 40,
         reviewed_files=["src/app.py"],
+        evaluated_requirement_ids=["BR-001"],
     ).model_dump(mode="json")
+
+
+def formal_requirements(issue: int) -> RequirementsResult:
+    return RequirementsResult(
+        decision=Decision.PASS,
+        summary="approved requirements",
+        evidence=[reference()],
+        requirements=[
+            RequirementItem(
+                id="BR-001",
+                type="BUSINESS",
+                description="Required behavior",
+                acceptance_criteria=["Required behavior is verified"],
+                source_reference=f"github:issue:{issue}",
+            )
+        ],
+        requirements_source="STRUCTURED_ISSUE",
+        human_approved=True,
+    )
 
 
 def review_runner(
@@ -123,6 +155,7 @@ def review_runner(
             branch=f"ai/issue-{issue}-review",
             pull_request_number=1 if github is not None else None,
             evidence=TaskEvidence(
+                requirements_result=formal_requirements(issue),
                 trusted_verification_results=[trusted_verification()],
                 traceability=[TraceabilityRecord(requirement_id="BR-001")],
             ),
@@ -253,22 +286,15 @@ def test_qa_conditions_use_dedicated_human_wait(initialized_project: Path) -> No
         "summary": "passed",
         "evidence": [reference()],
     }
+    requirements_result = formal_requirements(17)
     evidence = TaskEvidence(
-        requirements_result=RequirementsResult(
-            decision=Decision.PASS,
-            summary="approved requirements",
-            evidence=[reference()],
-            requirements=[
-                RequirementItem(
-                    id="BR-001",
-                    type="BUSINESS",
-                    description="Required behavior",
-                    acceptance_criteria=["Required behavior is verified"],
-                    source_reference="github:issue:17",
-                )
-            ],
-            requirements_source="STRUCTURED_ISSUE",
-            human_approved=True,
+        requirements_result=requirements_result,
+        requirements_approval=RequirementsApproval(
+            issue_number=17,
+            requirements_digest=requirements_digest(requirements_result.requirements),
+            approved_by="human-reviewer",
+            approved_at=datetime.now(UTC),
+            github_reference="mock://issues/17#approval",
         ),
         trusted_verification_results=[trusted_verification()],
         system_reviews=[
@@ -276,6 +302,7 @@ def test_qa_conditions_use_dedicated_human_wait(initialized_project: Path) -> No
                 **common,
                 reviewed_commit_sha="a" * 40,
                 reviewed_files=["src/app.py"],
+                evaluated_requirement_ids=["BR-001"],
             )
         ],
         business_reviews=[
@@ -288,12 +315,17 @@ def test_qa_conditions_use_dedicated_human_wait(initialized_project: Path) -> No
         traceability=[
             TraceabilityRecord(
                 requirement_id="BR-001",
-                implementation_references=["commit:" + "a" * 40],
-                test_references=["verification:test"],
+                design_references=["design:docs/design/traceability.md#要件対応"],
+                implementation_references=["file:src/app.py"],
                 acceptance_criteria_test_references={
-                    "Required behavior is verified": ["verification:test"]
+                    "Required behavior is verified": [
+                        "test:tests/test_mock.py::test_required_behavior"
+                    ]
                 },
-                review_references=["review:SYSTEM:test"],
+                review_references={
+                    "SYSTEM": ["review:SYSTEM:test"],
+                    "BUSINESS": ["review:BUSINESS:test"],
+                },
             )
         ],
     )
@@ -325,6 +357,7 @@ def test_qa_conditions_use_dedicated_human_wait(initialized_project: Path) -> No
             )
         ],
         reviewed_evidence_ids=["review-evidence"],
+        evaluated_requirement_ids=["BR-001"],
     )
     provider = MockAgentProvider(
         [

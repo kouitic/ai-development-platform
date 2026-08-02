@@ -13,6 +13,8 @@ forbidden_actions:
   - テスト削除またはセキュリティ検査無効化による失敗回避
 system_prompt: >-
   承認済み要件だけを実装し、要件追跡とテスト証拠を残してください。
+  requirement_implementationsへ要件別の設計文書と実装ファイルを、
+  acceptance_criterion_test_mappingsへ正式な受入条件とpytest node ID候補を記録してください。
   保護対象、品質基準、期待結果を変更せず、指定JSON Schemaの結果を返してください。
 provider: project_default
 model: default

@@ -5,8 +5,13 @@ from typer.testing import CliRunner
 
 import ai_dev_platform.cli as cli_module
 from ai_dev_platform.application.deployment import DEPLOYMENT_QUESTIONS
+from ai_dev_platform.application.requirements import (
+    parse_structured_issue_requirements,
+    requirements_digest,
+)
 from ai_dev_platform.cli import app
 from ai_dev_platform.domain.models import TaskRecord, WorkflowState
+from ai_dev_platform.infrastructure.github import MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
 
 runner = CliRunner()
@@ -36,6 +41,26 @@ def test_cli_init_validate_chat_run_approve_and_logs(tmp_path: Path) -> None:
     )
     assert run.exit_code == 0, run.output
     state_store = SQLiteStateStore(root / ".ai-dev" / "local" / "state.sqlite3")
+    assert state_store.get_task_by_issue(12).state == WorkflowState.REQUIREMENTS_APPROVAL_REQUIRED
+    requirements_approved = runner.invoke(
+        app,
+        [
+            "approve",
+            "--issue",
+            "12",
+            "--stage",
+            "requirements",
+            "--commit-sha",
+            commit,
+            "--approver",
+            "tester",
+            "--path",
+            str(root),
+        ],
+    )
+    assert requirements_approved.exit_code == 0, requirements_approved.output
+    deployment_wait = runner.invoke(app, ["run", "--issue", "12", "--path", str(root)])
+    assert deployment_wait.exit_code == 0, deployment_wait.output
     assert (
         state_store.get_task_by_issue(12).state == WorkflowState.DEPLOYMENT_CONFIGURATION_REQUIRED
     )
@@ -151,7 +176,28 @@ def test_cli_ask_does_not_change_state(initialized_project: Path) -> None:
     assert "informational" in result.output
 
 
-def test_review_and_qa_commands_share_quality_evidence(initialized_project: Path) -> None:
+def test_review_and_qa_commands_share_quality_evidence(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = MockGitHubGateway()
+    cli_module._seed_mock_gateway(
+        gateway,
+        issue_number=21,
+        pull_request_number=4,
+        commit_sha=cli_module._current_sha(initialized_project),
+    )
+    issue = gateway.get_issue(21)
+    requirements = parse_structured_issue_requirements(
+        issue.body,
+        source_reference=issue.url,
+    )
+    gateway.add_issue_comment(
+        21,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirements)}",
+    )
+    monkeypatch.setattr(cli_module, "_gateway", lambda _root, _name: gateway)
+    (initialized_project / "src").mkdir(exist_ok=True)
+    (initialized_project / "src" / "mock-change.py").write_text("value = 1\n", encoding="utf-8")
     common = [
         "--issue",
         "21",

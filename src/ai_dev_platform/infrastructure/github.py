@@ -6,10 +6,11 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from ai_dev_platform.domain.models import ChangedFile, IssueData, PullRequestData
+from ai_dev_platform.domain.models import ChangedFile, IssueComment, IssueData, PullRequestData
 from ai_dev_platform.security.scanner import ensure_safe_to_persist
 
 
@@ -21,6 +22,8 @@ class GitHubGateway(Protocol):
     """GitHub operations needed by the MVP; merge and production APIs are omitted."""
 
     def get_issue(self, issue_number: int) -> IssueData: ...
+
+    def get_issue_comments(self, issue_number: int) -> list[IssueComment]: ...
 
     def create_issue(self, title: str, body: str, labels: list[str]) -> int: ...
 
@@ -73,6 +76,7 @@ class MockGitHubGateway:
     issues: dict[int, dict[str, object]] = field(default_factory=dict)
     pull_requests: dict[int, dict[str, object]] = field(default_factory=dict)
     issue_comments: list[tuple[int, str]] = field(default_factory=list)
+    issue_comment_records: dict[int, list[IssueComment]] = field(default_factory=dict)
     pull_request_comments: list[tuple[int, str]] = field(default_factory=list)
     comments: list[tuple[int, str]] = field(default_factory=list)
     branches: list[str] = field(default_factory=list)
@@ -110,6 +114,12 @@ class MockGitHubGateway:
         self.issues[number] = {"title": title, "body": body, "labels": list(labels)}
         return number
 
+    def get_issue_comments(self, issue_number: int) -> list[IssueComment]:
+        self._maybe_fail()
+        if issue_number not in self.issues:
+            raise GitHubError("Issue was not found")
+        return list(self.issue_comment_records.get(issue_number, []))
+
     def update_issue(self, issue_number: int, body: str) -> None:
         self._maybe_fail()
         ensure_safe_to_persist(body)
@@ -122,7 +132,17 @@ class MockGitHubGateway:
         ensure_safe_to_persist(body)
         self.issue_comments.append((issue_number, body))
         self.comments.append((issue_number, body))
-        return f"mock-issue-comment-{len(self.issue_comments)}"
+        comment_id = f"mock-issue-comment-{len(self.issue_comments)}"
+        reference = f"mock://issues/{issue_number}#{comment_id}"
+        self.issue_comment_records.setdefault(issue_number, []).append(
+            IssueComment(
+                body=body,
+                author="mock-human",
+                created_at=datetime.now(UTC),
+                url=reference,
+            )
+        )
+        return comment_id
 
     def add_comment(self, issue_number: int, body: str) -> None:
         """Compatibility alias for the original MVP contract."""
@@ -271,6 +291,34 @@ class GhCliGateway:
             labels=[str(item.get("name", "")) for item in labels if isinstance(item, dict)],
             url=str(raw.get("url", "")),
         )
+
+    def get_issue_comments(self, issue_number: int) -> list[IssueComment]:
+        raw = self._json(["issue", "view", str(issue_number), "--json", "comments"])
+        comments = raw.get("comments", [])
+        result: list[IssueComment] = []
+        for item in comments:
+            if not isinstance(item, dict):
+                continue
+            author = item.get("author", {})
+            login = str(author.get("login", "")) if isinstance(author, dict) else ""
+            created_at = str(item.get("createdAt", ""))
+            url = str(item.get("url", ""))
+            if not login or not created_at or not url:
+                continue
+            try:
+                parsed_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise GitHubError("GitHub comment timestamp is invalid") from exc
+            result.append(
+                IssueComment(
+                    body=str(item.get("body", "")),
+                    author=login,
+                    created_at=parsed_at,
+                    url=url,
+                    author_is_bot=login.lower().endswith("[bot]"),
+                )
+            )
+        return result
 
     def create_issue(self, title: str, body: str, labels: list[str]) -> int:
         ensure_safe_to_persist(body)

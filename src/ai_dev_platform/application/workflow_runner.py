@@ -11,8 +11,17 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
 from ai_dev_platform.application.context_builder import TaskContextBuilder
-from ai_dev_platform.application.requirements import parse_structured_issue_requirements
-from ai_dev_platform.application.traceability import traceability_failure
+from ai_dev_platform.application.requirements import (
+    find_requirements_approval,
+    parse_structured_issue_requirements,
+    requirements_digest,
+)
+from ai_dev_platform.application.traceability import (
+    assert_references_exist_at_commit,
+    build_validated_traceability,
+    review_coverage_failure,
+    traceability_failure,
+)
 from ai_dev_platform.domain.models import (
     AgentDefinition,
     AgentRequest,
@@ -38,7 +47,11 @@ from ai_dev_platform.domain.models import (
     WorkflowState,
 )
 from ai_dev_platform.domain.workflow import TERMINAL_STATES, assert_transition
-from ai_dev_platform.infrastructure.git import GitOperationError, GitWorktreeGateway
+from ai_dev_platform.infrastructure.git import (
+    GitOperationError,
+    GitWorktreeGateway,
+    MockGitWorktree,
+)
 from ai_dev_platform.infrastructure.github import GitHubError, GitHubGateway, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
 from ai_dev_platform.infrastructure.verification import VerificationError, VerificationRunner
@@ -237,6 +250,15 @@ class WorkflowRunner:
         definition = self.agents[agent_id]
         try:
             context = self.context_builder.build(task, task.state, definition)
+            if task.state in {
+                WorkflowState.SYSTEM_REVIEW,
+                WorkflowState.BUSINESS_REVIEW,
+                WorkflowState.QA_ASSESSMENT,
+            }:
+                context["review_coverage"] = {
+                    requirement_type.value: rule.model_dump(mode="json")
+                    for requirement_type, rule in self.config.review_coverage.items()
+                }
         except SensitiveContentError:
             return self._move(
                 task,
@@ -297,6 +319,7 @@ class WorkflowRunner:
             )
         try:
             result = result_model.model_validate(provider_result.output)
+            requirements_approval = None
             if isinstance(result, RequirementsResult):
                 try:
                     formal_requirements = parse_structured_issue_requirements(
@@ -310,6 +333,12 @@ class WorkflowRunner:
                         update={"requirements_source": "AI_CANDIDATE", "human_approved": False}
                     )
                 else:
+                    if self.github is not None:
+                        requirements_approval = find_requirements_approval(
+                            task.issue_number,
+                            formal_requirements,
+                            self.github.get_issue_comments(task.issue_number),
+                        )
                     result = result.model_copy(
                         update={
                             "requirements": formal_requirements,
@@ -324,11 +353,16 @@ class WorkflowRunner:
                                 for criterion in item.acceptance_criteria
                             ],
                             "requirements_source": "STRUCTURED_ISSUE",
-                            "human_approved": True,
+                            "human_approved": requirements_approval is not None,
                         }
                     )
+                    if requirements_approval is not None:
+                        evidence = task.evidence.model_copy(deep=True)
+                        evidence.requirements_approval = requirements_approval
+                        task = task.model_copy(update={"evidence": evidence})
             self._validate_evidence_references(result)
             result = self._bind_review_target(task, result)
+            self._validate_review_scope(task, result)
             task = self._persist_result(task, result)
         except (ValidationError, ValueError):
             target = (
@@ -417,6 +451,8 @@ class WorkflowRunner:
             return self._move(task, WorkflowState.REWORK_REQUIRED, "verification_invalidated")
         try:
             task = self._publish_development_changes(task, developer_result, verification)
+        except ValueError:
+            return self._move(task, WorkflowState.REWORK_REQUIRED, "traceability_evidence_invalid")
         except (GitOperationError, GitHubError):
             return self._move(task, WorkflowState.BLOCKED, "commit_push_or_pr_failed")
         return self._move(task, WorkflowState.SYSTEM_REVIEW, "trusted_verification_passed")
@@ -430,17 +466,33 @@ class WorkflowRunner:
         """Commit, bind evidence, push, then create or reuse a PR in that order."""
         if self.git is None or self.github is None:
             raise GitOperationError("Git and GitHub gateways are required before review")
+        requirements = task.evidence.requirements_result
+        if requirements is None:
+            raise ValueError("formal requirements are required before implementation evidence")
+        protected_path_approved = bool(task.context.get("protected_path_approved", False))
+        traces = build_validated_traceability(
+            self.context_builder.root,
+            requirements,
+            result,
+            verification,
+            protected_patterns=self.config.protected_paths,
+            protected_path_approved=protected_path_approved,
+            trusted_mock_files=(
+                set(verification.changed_files) if isinstance(self.git, MockGitWorktree) else set()
+            ),
+        )
         commit_sha = self.git.commit(
-            f"Issue #{task.issue_number}: AI-assisted implementation",
+            f"Issue #{task.issue_number}: AI支援による実装",
             result.changed_files,
             verification,
-            protected_path_approved=bool(task.context.get("protected_path_approved", False)),
+            protected_path_approved=protected_path_approved,
         )
+        assert_references_exist_at_commit(self.context_builder.root, traces, commit_sha)
         evidence = task.evidence.model_copy(deep=True)
         evidence.trusted_verification_results[-1] = verification.model_copy(
             update={"commit_sha": commit_sha}
         )
-        self._bind_traceability_to_verification(evidence, commit_sha, verification)
+        evidence.traceability = traces
         self._bind_findings_to_verified_commit(evidence, commit_sha)
         task = self.store.save_task(
             task.model_copy(update={"commit_sha": commit_sha, "evidence": evidence})
@@ -454,8 +506,8 @@ class WorkflowRunner:
                 task.issue_number,
                 task.branch,
                 self.config.github.default_branch,
-                f"Issue #{task.issue_number}: AI-assisted implementation",
-                "Automated draft for human-governed review. Merge is not performed by ai-dev.",
+                f"Issue #{task.issue_number}: AI支援による実装",
+                "人間の最終判断を前提としたレビュー用の下書きです。ai-devはマージしません。",
             )
         updated = self.store.save_task(task.model_copy(update={"pull_request_number": pr_number}))
         self.store.append_event(
@@ -548,6 +600,16 @@ class WorkflowRunner:
             ):
                 return task
             evidence.requirements_result = result
+            if not result.human_approved or (
+                evidence.requirements_approval is None
+                or evidence.requirements_approval.requirements_digest
+                != requirements_digest(result.requirements)
+            ):
+                evidence.requirements_approval = None
+            evidence.traceability = [
+                TraceabilityRecord(requirement_id=requirement.id)
+                for requirement in result.requirements
+            ]
         elif isinstance(result, DeveloperResult):
             if self._append_result_once(evidence.developer_results, result):
                 evidence.agent_reported_test_results.extend(result.test_results)
@@ -566,6 +628,7 @@ class WorkflowRunner:
             if self._append_result_once(evidence.qa_assessments, result):
                 self._merge_findings(evidence, result, ReviewType.QA, task.commit_sha)
                 self._confirm_resolutions(evidence, result, ReviewType.QA, task.commit_sha)
+                self._add_review_traceability(evidence, result, ReviewType.QA)
         return task.model_copy(update={"evidence": evidence})
 
     @staticmethod
@@ -579,23 +642,23 @@ class WorkflowRunner:
     @staticmethod
     def _add_review_traceability(
         evidence: TaskEvidence,
-        result: SystemReviewResult | BusinessReviewResult,
+        result: SystemReviewResult | BusinessReviewResult | QaAssessmentResult,
         review_type: ReviewType,
     ) -> None:
         requirements = evidence.requirements_result
         if requirements is None:
             return
-        if isinstance(result, BusinessReviewResult):
-            reviewed_ids = set(result.evaluated_requirement_ids)
-        else:
-            reviewed_ids = {requirement.id for requirement in requirements.requirements}
+        reviewed_ids = set(result.evaluated_requirement_ids)
         reference = f"review:{review_type.value}:{result.run_id}"
         updated: list[TraceabilityRecord] = []
         for record in evidence.traceability:
             if record.requirement_id not in reviewed_ids:
                 updated.append(record)
                 continue
-            review_references = list(dict.fromkeys([*record.review_references, reference]))
+            review_references = dict(record.review_references)
+            review_references[review_type] = list(
+                dict.fromkeys([*review_references.get(review_type, []), reference])
+            )
             updated.append(record.model_copy(update={"review_references": review_references}))
         evidence.traceability = updated
 
@@ -640,53 +703,6 @@ class WorkflowRunner:
                 )
             updated.append(finding)
         evidence.unresolved_findings = updated
-
-    @staticmethod
-    def _bind_traceability_to_verification(
-        evidence: TaskEvidence,
-        commit_sha: str,
-        verification: VerificationResult,
-    ) -> None:
-        """Create exact requirement traces only after trusted post-change verification."""
-        requirements = evidence.requirements_result
-        if requirements is None:
-            return
-        current = {record.requirement_id: record for record in evidence.traceability}
-        verification_reference = f"verification:{verification.run_id}"
-        for requirement in requirements.requirements:
-            record = current.get(
-                requirement.id,
-                TraceabilityRecord(requirement_id=requirement.id),
-            )
-            implementation_references = list(
-                dict.fromkeys(
-                    [
-                        *record.implementation_references,
-                        f"commit:{commit_sha}",
-                        *(f"file:{path}" for path in verification.changed_files),
-                    ]
-                )
-            )
-            test_references = list(dict.fromkeys([*record.test_references, verification_reference]))
-            acceptance_references = {
-                criterion: list(
-                    dict.fromkeys(
-                        [
-                            *record.acceptance_criteria_test_references.get(criterion, []),
-                            verification_reference,
-                        ]
-                    )
-                )
-                for criterion in requirement.acceptance_criteria
-            }
-            current[requirement.id] = record.model_copy(
-                update={
-                    "implementation_references": implementation_references,
-                    "test_references": test_references,
-                    "acceptance_criteria_test_references": acceptance_references,
-                }
-            )
-        evidence.traceability = list(current.values())
 
     @staticmethod
     def _merge_findings(
@@ -795,7 +811,51 @@ class WorkflowRunner:
             return WorkflowState.REWORK_REQUIRED, False
         if isinstance(result, RequirementsResult) and not result.human_approved:
             return WorkflowState.REQUIREMENTS_APPROVAL_REQUIRED, True
+        if isinstance(result, QaAssessmentResult):
+            latest_verification = (
+                task.evidence.trusted_verification_results[-1]
+                if task.evidence.trusted_verification_results
+                else None
+            )
+            failure = traceability_failure(
+                task.evidence.requirements_result,
+                task.evidence.requirements_approval,
+                task.evidence.traceability,
+                latest_verification,
+                commit_sha=task.commit_sha,
+                config=self.config,
+                require_optional=self.config.workflow.optional_requirement_traceability_required,
+                issue_number=task.issue_number,
+            )
+            if failure is not None:
+                return WorkflowState.REWORK_REQUIRED, False
         return PASS_NEXT[task.state], True
+
+    def _validate_review_scope(self, task: TaskRecord, result: StageResult) -> None:
+        if not isinstance(
+            result,
+            (SystemReviewResult, BusinessReviewResult, QaAssessmentResult),
+        ):
+            return
+        requirements = task.evidence.requirements_result
+        if requirements is None:
+            raise ValueError("formal requirements are missing")
+        review_type = (
+            ReviewType.SYSTEM
+            if isinstance(result, SystemReviewResult)
+            else ReviewType.BUSINESS
+            if isinstance(result, BusinessReviewResult)
+            else ReviewType.QA
+        )
+        failure = review_coverage_failure(
+            requirements,
+            review_type,
+            result.evaluated_requirement_ids,
+            result.excluded_requirement_reasons,
+            self.config,
+        )
+        if failure is not None:
+            raise ValueError(failure)
 
     @staticmethod
     def _bind_review_target(task: TaskRecord, result: StageResult) -> StageResult:
@@ -922,10 +982,21 @@ class WorkflowRunner:
             for finding in task.evidence.unresolved_findings
         ):
             return "blocking_findings_unresolved"
+        latest_verification = (
+            task.evidence.trusted_verification_results[-1]
+            if task.evidence.trusted_verification_results
+            else None
+        )
         return traceability_failure(
             task.evidence.requirements_result,
+            task.evidence.requirements_approval,
             task.evidence.traceability,
+            latest_verification,
+            commit_sha=task.commit_sha,
+            config=self.config,
             require_optional=self.config.workflow.optional_requirement_traceability_required,
+            issue_number=task.issue_number,
+            review_scope={ReviewType.SYSTEM, ReviewType.BUSINESS},
         )
 
     @staticmethod
