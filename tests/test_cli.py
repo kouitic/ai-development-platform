@@ -12,6 +12,11 @@ from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _use_mock_github_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_DEV_GITHUB_GATEWAY", "mock")
+
+
 def test_cli_init_validate_chat_run_approve_and_logs(tmp_path: Path) -> None:
     root = tmp_path / "cli-project"
     root.mkdir()
