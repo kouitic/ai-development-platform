@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -33,12 +34,61 @@ _REQUIRED_SECURITY_FILES = [
     ".ai-dev/policies/verification.yaml",
 ]
 
+_VERIFICATION_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "APPDATA",
+        "CI",
+        "COLORTERM",
+        "COMSPEC",
+        "CURL_CA_BUNDLE",
+        "FORCE_COLOR",
+        "HOME",
+        "LANG",
+        "LANGUAGE",
+        "LOCALAPPDATA",
+        "NO_COLOR",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PROGRAMW6432",
+        "PYTHONIOENCODING",
+        "PYTHONUTF8",
+        "REQUESTS_CA_BUNDLE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USERPROFILE",
+        "UV_CACHE_DIR",
+        "UV_PYTHON_INSTALL_DIR",
+        "WINDIR",
+    }
+)
+
 
 class VerificationError(RuntimeError):
     """The host could not establish a trustworthy verification result."""
 
 
 _TEST_STATUS_PRIORITY = {"PASS": 0, "SKIP": 1, "FAIL": 2, "ERROR": 3}
+
+
+def _verification_environment() -> dict[str, str]:
+    """Return a minimal non-secret environment for host verification commands."""
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() in _VERIFICATION_ENVIRONMENT_ALLOWLIST or name.upper().startswith("LC_")
+    }
+    environment["AI_DEV_PROVIDER"] = "mock"
+    environment["AI_DEV_GITHUB_GATEWAY"] = "mock"
+    return environment
 
 
 def _junit_test_identity(root: Path, testcase: ET.Element) -> tuple[str, str]:
@@ -316,6 +366,7 @@ class LocalVerificationRunner:
                 cwd=root,
                 capture_output=True,
                 text=True,
+                env=_verification_environment(),
                 check=False,
                 timeout=command.timeout_seconds,
                 shell=False,

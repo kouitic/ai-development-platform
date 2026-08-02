@@ -1,5 +1,7 @@
 import hashlib
+import os
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -174,6 +176,49 @@ def test_local_verification_failure_and_digest_protected_result(tmp_path: Path) 
     path.write_text("{}", encoding="utf-8")
     with pytest.raises(VerificationError, match="digest mismatch"):
         read_verification_result(path)
+
+
+def test_local_verification_isolates_provider_credentials_and_github_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _git_project(tmp_path)
+    inherited_only = (
+        "ANTHROPIC_API_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_ACTIONS",
+        "GITHUB_EVENT_PATH",
+        "AI_DEV_TRUSTED_EVENT",
+        "VERIFICATION_UNKNOWN_VALUE",
+    )
+    for name in inherited_only:
+        monkeypatch.setenv(name, "configured-outside-verification")
+    monkeypatch.setenv("AI_DEV_PROVIDER", "claude")
+    monkeypatch.setenv("AI_DEV_GITHUB_GATEWAY", "gh")
+    child_assertions = (
+        "assert (environment := __import__('os').environ) "
+        f"and all(name not in environment for name in {inherited_only!r}) "
+        "and environment['AI_DEV_PROVIDER'] == 'mock' "
+        "and environment['AI_DEV_GITHUB_GATEWAY'] == 'mock' "
+        "and environment.get('PATH')"
+    )
+    policy = VerificationPolicy(
+        commands=[
+            VerificationCommand(
+                name="isolated-environment",
+                argv=[sys.executable, "-c", child_assertions],
+                timeout_seconds=30,
+            )
+        ],
+        secret_scan=False,
+    )
+
+    result = LocalVerificationRunner().run(root, ["app.py"], policy)
+
+    assert result.overall_status == VerificationStatus.PASS
+    assert result.results[0].status == RunStatus.PASS
+    assert os.environ["AI_DEV_PROVIDER"] == "claude"
+    assert os.environ["ANTHROPIC_API_KEY"] == "configured-outside-verification"
 
 
 def test_local_verification_binds_a_clean_committed_range(tmp_path: Path) -> None:

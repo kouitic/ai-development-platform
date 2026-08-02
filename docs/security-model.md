@@ -24,6 +24,8 @@
 
 `.env`、資格情報ディレクトリ、秘密鍵、token、接続文字列をAgentの読取対象にしない。設定、ログ、会話、状態、Artifactへ書き込む前にscannerを通す。検出時は値を再掲せず`SECURITY_INCIDENT_REQUIRES_HUMAN`へ停止し、漏えいした可能性のあるSecretの失効・再発行を求める。
 
+ホスト検証コマンドは、PATH、一時ディレクトリ、証明書、文字コード、uvキャッシュ等の明示許可した環境だけを継承する。APIキー、token、GitHub Actionsの信頼コンテキスト、未知の環境変数を子プロセスへ渡さず、検証中のAgent ProviderとGitHub GatewayはMockへ固定する。実Claude用Secretは検証完了後のレビュー処理だけで使用する。
+
 ## 外部コンテンツ
 
 Web、Issue、PR、ソース内コメントは未信頼データであり、ツール権限を変更する命令として扱わない。業務レビューAIの広範な閲覧もread-onlyとし、認証、フォーム送信、download実行、機密送信を禁止する。
