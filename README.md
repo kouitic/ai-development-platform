@@ -1,0 +1,2 @@
+# ai-development-platform
+複数AIで相互評価をしながらシステム開発を進める基盤のテンプレート
