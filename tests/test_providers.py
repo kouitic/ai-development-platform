@@ -159,6 +159,7 @@ def test_provider_factory_enforces_real_runtime_trust(
     real_config = config.model_copy(
         update={"github": config.github.model_copy(update={"enabled": True, "gateway": "gh"})}
     )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(ValueError, match="GitHub Actions"):
         create_provider(real_config, root=initialized_project)
 

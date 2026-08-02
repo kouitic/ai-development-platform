@@ -36,6 +36,8 @@ jobs:
         run: uv run ai-dev verify-source-package --archive .ai-dev/local/submission.zip
       - name: Secret history scan
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve linked Issue
         env:
           GH_TOKEN: ${{ github.token }}

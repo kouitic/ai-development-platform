@@ -38,3 +38,15 @@ def test_ci_runs_clean_install_contract_on_python_312_and_313() -> None:
     assert "uv run --no-sync ai-dev verify-source-package" in workflow
     assert "uv sync --frozen --extra dev --extra claude" in workflow
     assert 'python -c "import claude_agent_sdk"' in workflow
+
+
+def test_gitleaks_actions_receive_the_automatic_github_token() -> None:
+    workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    for workflow_root in workflow_roots:
+        ci = (workflow_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        quality = (workflow_root / ".github" / "workflows" / "ai-quality-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "pull-requests: read" in ci
+        assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in ci
+        assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in quality
