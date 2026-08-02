@@ -1,5 +1,8 @@
 # GitHub設定ガイド
 
+> **適用範囲: パターン②**
+> 本書は、`ai-development-platform`が対象システムへ要求するGitHub設定です。プラットフォーム自体の保守リポジトリに対するCodexの作業規約ではありません。両者の境界は`repository-governance.md`を参照してください。
+
 ## ブランチ
 
 GitHub Flowを使い、`main`と`ai/issue-<number>-<description>`を使用します。`develop`はMVPで必須ではありません。
