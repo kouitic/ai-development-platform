@@ -13,6 +13,7 @@ from ai_dev_platform.application.quality_artifacts import (
 )
 from ai_dev_platform.application.quality_gate import (
     _assert_verification_target,
+    _developer_traceability_failure_message,
     prepare_quality_task,
     run_integrated_quality_gates,
 )
@@ -23,6 +24,8 @@ from ai_dev_platform.application.requirements import (
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
+    AgentResult,
+    AgentRunStatus,
     ChangedFile,
     Decision,
     DeveloperResult,
@@ -59,6 +62,22 @@ from ai_dev_platform.infrastructure.verification import (
     write_verification_result,
 )
 from ai_dev_platform.providers.mock import MockAgentProvider
+
+
+def test_developer_traceability_failure_message_is_diagnostic_and_sanitized() -> None:
+    api_error = AgentResult(
+        status=AgentRunStatus.ERROR,
+        error_code="provider_api_error_429",
+        summary="sensitive response detail",
+    )
+    assert _developer_traceability_failure_message(api_error) == (
+        "developer traceability collection failed: status=ERROR; code=provider_api_error_429"
+    )
+
+    unsafe_error = api_error.model_copy(update={"error_code": "unsafe\nsecret=value"})
+    message = _developer_traceability_failure_message(unsafe_error)
+    assert "secret" not in message
+    assert message.endswith("code=provider_failure")
 
 
 def _run_git(root: Path, *args: str) -> None:

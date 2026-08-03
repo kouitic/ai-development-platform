@@ -44,9 +44,16 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch, query: object) -> None:
 
 
 def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def query(**_: object):
+    async def query(**kwargs: object):
+        options = kwargs["options"]
+        assert options.kwargs["output_format"] == {
+            "type": "json_schema",
+            "schema": SCHEMA,
+        }
         yield SimpleNamespace(
-            content=[SimpleNamespace(text=json.dumps({"decision": "PASS", "summary": "ok"}))],
+            content=[],
+            structured_output={"decision": "PASS", "summary": "ok"},
+            num_turns=1,
             total_cost_usd=0.1,
         )
 
@@ -55,6 +62,18 @@ def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPat
     assert result.status == AgentRunStatus.SUCCESS
     assert result.output["decision"] == "PASS"
     assert result.estimated_cost_usd == 0.1
+
+
+def test_claude_provider_keeps_text_json_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[SimpleNamespace(text=json.dumps({"decision": "PASS", "summary": "ok"}))]
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.SUCCESS
+    assert result.output["decision"] == "PASS"
 
 
 def test_claude_provider_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,6 +118,28 @@ def test_claude_provider_handles_exception_without_details(monkeypatch: pytest.M
     fake_sdk(monkeypatch, query)
     result = asyncio.run(ClaudeAgentProvider().execute(request()))
     assert result.status == AgentRunStatus.ERROR
+    assert "provider detail" not in result.summary
+
+
+def test_claude_provider_classifies_api_error_without_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[],
+            is_error=True,
+            api_error_status=429,
+            num_turns=1,
+            total_cost_usd=0.02,
+            errors=["sensitive provider detail"],
+        )
+        raise RuntimeError("sensitive provider detail after the error result")
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.ERROR
+    assert result.error_code == "provider_api_error_429"
+    assert result.estimated_cost_usd == 0.02
     assert "provider detail" not in result.summary
 
 

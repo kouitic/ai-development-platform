@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from ai_dev_platform.application.quality_artifacts import (
@@ -23,6 +24,7 @@ from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig
 from ai_dev_platform.domain.models import (
     AgentRequest,
+    AgentResult,
     AgentRunStatus,
     Decision,
     DeveloperResult,
@@ -43,6 +45,18 @@ from ai_dev_platform.infrastructure.github import GitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore, TaskNotFoundError
 from ai_dev_platform.providers.base import AgentProvider
 from ai_dev_platform.security.scanner import scan_tree
+
+_SAFE_PROVIDER_ERROR_CODE = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
+
+
+def _developer_traceability_failure_message(result: AgentResult) -> str:
+    """Return a diagnostic that cannot expose provider response or exception text."""
+    error_code = result.error_code or "provider_failure"
+    if _SAFE_PROVIDER_ERROR_CODE.fullmatch(error_code) is None:
+        error_code = "provider_failure"
+    return (
+        f"developer traceability collection failed: status={result.status.value}; code={error_code}"
+    )
 
 
 def _bootstrap_evidence(
@@ -236,7 +250,7 @@ async def _collect_host_validated_traceability(
     )
     provider_result = await provider.execute(request)
     if provider_result.status != AgentRunStatus.SUCCESS:
-        raise ValueError("developer traceability collection failed")
+        raise ValueError(_developer_traceability_failure_message(provider_result))
     developer_result = DeveloperResult.model_validate(provider_result.output)
     if sorted(developer_result.changed_files) != sorted(verification.changed_files):
         raise ValueError("developer traceability files do not match trusted verification")
