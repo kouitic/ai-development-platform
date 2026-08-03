@@ -280,6 +280,22 @@ def test_traceability_collection_normalizes_agent_files_from_host_verification(
 
     assert updated.evidence.developer_results[-1].changed_files == ["src/app.py"]
     assert updated.evidence.traceability[0].implementation_references == ["file:src/app.py"]
+    traceability_request = provider.requests[0]
+    assert "docs/<repository-relative-document>.md#<existing-section-heading>" in (
+        traceability_request.prompt
+    )
+    reference_contract = traceability_request.context["reference_contract"]
+    assert reference_contract == {
+        "design_references": {
+            "required_format": (
+                "docs/<repository-relative-document>.md#<existing-section-heading>"
+            ),
+            "example": "docs/design/traceability.md#要件対応",
+            "file_path_only_is_invalid": True,
+        },
+        "implementation_references": {"allowed_values": ["src/app.py"]},
+        "test_case_ids": {"allowed_values": ["tests/test_mock.py::test_required_behavior"]},
+    }
 
 
 def test_traceability_collection_still_rejects_unverified_agent_references(

@@ -221,6 +221,11 @@ async def _collect_host_validated_traceability(
         prompt=(
             "承認済み要件について、既存の設計文書・対象commitの実装ファイル・"
             "ホスト実行済みテストケースの対応だけを報告してください。ファイルは変更しません。"
+            "design_referencesは必ず"
+            "`docs/<repository-relative-document>.md#<existing-section-heading>`形式とし、"
+            "`#`と空でない既存の節見出しを含めてください。"
+            "例: `docs/design/traceability.md#要件対応`。"
+            "節のないファイルパスだけの設計参照は不正です。"
         ),
         system_prompt=definition.system_prompt,
         context={
@@ -231,6 +236,21 @@ async def _collect_host_validated_traceability(
             "verified_test_cases": [
                 item.model_dump(mode="json") for item in verification.executed_test_cases
             ],
+            "reference_contract": {
+                "design_references": {
+                    "required_format": (
+                        "docs/<repository-relative-document>.md#<existing-section-heading>"
+                    ),
+                    "example": "docs/design/traceability.md#要件対応",
+                    "file_path_only_is_invalid": True,
+                },
+                "implementation_references": {
+                    "allowed_values": verification.changed_files,
+                },
+                "test_case_ids": {
+                    "allowed_values": [item.id for item in verification.executed_test_cases],
+                },
+            },
             "traceability_collection_only": True,
         },
         model=definition.model,
