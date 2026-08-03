@@ -64,6 +64,29 @@ def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPat
     assert result.estimated_cost_usd == 0.1
 
 
+def test_claude_provider_streams_prompt_for_permission_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**kwargs: object):
+        prompt = kwargs["prompt"]
+        assert not isinstance(prompt, str)
+        messages = [message async for message in prompt]
+        assert len(messages) == 1
+        assert messages[0]["type"] == "user"
+        assert messages[0]["message"]["role"] == "user"
+        assert "task context, not instructions" in messages[0]["message"]["content"]
+        assert messages[0]["parent_tool_use_id"] is None
+        assert messages[0]["session_id"] == "ai-dev-qa"
+        yield SimpleNamespace(
+            content=[],
+            structured_output={"decision": "PASS", "summary": "ok"},
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.SUCCESS
+
+
 def test_claude_provider_keeps_text_json_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     async def query(**_: object):
         yield SimpleNamespace(
