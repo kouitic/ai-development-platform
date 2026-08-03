@@ -23,7 +23,10 @@ from ai_dev_platform.application.requirements import (
     parse_structured_issue_requirements,
     requirements_digest,
 )
-from ai_dev_platform.application.traceability import collect_design_reference_candidates
+from ai_dev_platform.application.traceability import (
+    collect_design_reference_candidates,
+    collect_implementation_reference_candidates,
+)
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig, load_config
 from ai_dev_platform.domain.models import (
@@ -112,14 +115,20 @@ def test_design_reference_candidates_are_commit_bound_and_unprotected(
     _run_git(root, "config", "user.name", "Test")
     design_document = root / "docs" / "design" / "current.md"
     protected_document = root / "docs" / "quality" / "protected.md"
+    implementation = root / "src" / "app.py"
+    protected_implementation = root / ".ai-dev" / "project.yaml"
     design_document.parent.mkdir(parents=True)
     protected_document.parent.mkdir(parents=True)
+    implementation.parent.mkdir(parents=True)
+    protected_implementation.parent.mkdir(parents=True)
     design_document.write_text(
         "# 公開設計\n\n```markdown\n## コード例\n```\n\n## 実在する節 ##\n",
         encoding="utf-8",
     )
     protected_document.write_text("# 内部基準\n", encoding="utf-8")
-    _run_git(root, "add", "docs")
+    implementation.write_text("value = 1\n", encoding="utf-8")
+    protected_implementation.write_text("project: test\n", encoding="utf-8")
+    _run_git(root, "add", ".")
     _run_git(root, "commit", "-m", "add design documents")
     commit_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -130,6 +139,7 @@ def test_design_reference_candidates_are_commit_bound_and_unprotected(
         shell=False,
     ).stdout.strip()
     design_document.write_text("# 未コミットの見出し\n", encoding="utf-8")
+    implementation.unlink()
 
     candidates = collect_design_reference_candidates(
         root,
@@ -141,6 +151,13 @@ def test_design_reference_candidates_are_commit_bound_and_unprotected(
         "docs/design/current.md#公開設計",
         "docs/design/current.md#実在する節",
     ]
+    implementation_candidates = collect_implementation_reference_candidates(
+        root,
+        ["src/app.py", ".ai-dev/project.yaml", "src/missing.py"],
+        protected_patterns=[".ai-dev/**"],
+        commit_sha=commit_sha,
+    )
+    assert implementation_candidates == ["src/app.py"]
 
 
 def _policy(*, passing: bool = True) -> VerificationPolicy:
@@ -250,7 +267,10 @@ def _traceability_result(
 
 def _prepared_traceability_task(
     initialized_project: Path,
+    *,
+    changed_files: list[str] | None = None,
 ) -> tuple[LoadedConfig, SQLiteStateStore, TaskRecord, VerificationResult]:
+    changed_files = ["src/app.py"] if changed_files is None else changed_files
     loaded = load_config(initialized_project)
     store = SQLiteStateStore(
         initialized_project / ".ai-dev" / "local" / "traceability-normalization.sqlite3"
@@ -276,7 +296,7 @@ requirements:
         base_branch="main",
         head_sha="a" * 40,
     ).model_dump(mode="json")
-    gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
+    gateway.changed_files[7] = [ChangedFile(path=path, status="modified") for path in changed_files]
     (initialized_project / "src").mkdir(exist_ok=True)
     (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
     requirement_items = parse_structured_issue_requirements(
@@ -286,7 +306,7 @@ requirements:
         41,
         f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirement_items)}",
     )
-    verification = _trusted_result("a" * 40, ["src/app.py"], "reviewed diff")
+    verification = _trusted_result("a" * 40, changed_files, "reviewed diff")
     task = prepare_quality_task(
         store,
         gateway,
@@ -399,7 +419,7 @@ def test_traceability_collection_still_rejects_unverified_agent_references(
         ]
     )
 
-    with pytest.raises(ValueError, match="not part of the verified change"):
+    with pytest.raises(ValueError, match=r"implementation reference.*host-approved candidate set"):
         asyncio.run(
             _collect_host_validated_traceability(
                 loaded,
@@ -410,6 +430,63 @@ def test_traceability_collection_still_rejects_unverified_agent_references(
                 verification,
             )
         )
+
+
+def test_traceability_collection_excludes_protected_changed_implementation_references(
+    initialized_project: Path,
+) -> None:
+    loaded, store, task, verification = _prepared_traceability_task(
+        initialized_project,
+        changed_files=["src/app.py", ".ai-dev/project.yaml"],
+    )
+    provider = MockAgentProvider(
+        scripted_results=[
+            _traceability_result(
+                reported_files=["src/app.py", ".ai-dev/project.yaml"],
+                implementation_reference=".ai-dev/project.yaml",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match=r"implementation reference.*host-approved candidate set"):
+        asyncio.run(
+            _collect_host_validated_traceability(
+                loaded,
+                provider,
+                store,
+                initialized_project,
+                task,
+                verification,
+            )
+        )
+    traceability_request = provider.requests[0]
+    assert traceability_request.context["changed_files"] == ["src/app.py"]
+    assert traceability_request.context["reference_contract"]["implementation_references"] == {
+        "allowed_values": ["src/app.py"]
+    }
+
+
+def test_traceability_collection_requires_unprotected_implementation_candidate(
+    initialized_project: Path,
+) -> None:
+    loaded, store, task, verification = _prepared_traceability_task(
+        initialized_project,
+        changed_files=[".ai-dev/project.yaml"],
+    )
+    provider = MockAgentProvider()
+
+    with pytest.raises(ValueError, match="no unprotected implementation reference candidates"):
+        asyncio.run(
+            _collect_host_validated_traceability(
+                loaded,
+                provider,
+                store,
+                initialized_project,
+                task,
+                verification,
+            )
+        )
+    assert provider.requests == []
 
 
 def test_local_verification_is_bound_to_post_change_snapshot(tmp_path: Path) -> None:

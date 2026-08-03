@@ -20,6 +20,7 @@ from ai_dev_platform.application.traceability import (
     assert_references_exist_at_commit,
     build_validated_traceability,
     collect_design_reference_candidates,
+    collect_implementation_reference_candidates,
 )
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig
@@ -224,6 +225,14 @@ async def _collect_host_validated_traceability(
     )
     if not design_reference_candidates:
         raise ValueError("no unprotected design reference candidates were found")
+    implementation_reference_candidates = collect_implementation_reference_candidates(
+        root,
+        verification.changed_files,
+        protected_patterns=loaded.project.protected_paths,
+        commit_sha=task.commit_sha,
+    )
+    if not implementation_reference_candidates:
+        raise ValueError("no unprotected implementation reference candidates were found")
     request = AgentRequest(
         agent_id=definition.id,
         prompt=(
@@ -235,13 +244,15 @@ async def _collect_host_validated_traceability(
             "例: `docs/design/traceability.md#要件対応`。"
             "節のないファイルパスだけの設計参照は不正です。"
             "design_referencesはreference_contractにあるallowed_valuesからだけ選んでください。"
+            "implementation_referencesもreference_contractにあるallowed_valuesからだけ"
+            "選んでください。"
         ),
         system_prompt=definition.system_prompt,
         context={
             "issue_number": task.issue_number,
             "commit_sha": task.commit_sha,
             "requirements": [item.model_dump(mode="json") for item in requirements.requirements],
-            "changed_files": verification.changed_files,
+            "changed_files": implementation_reference_candidates,
             "verified_test_cases": [
                 item.model_dump(mode="json") for item in verification.executed_test_cases
             ],
@@ -255,7 +266,7 @@ async def _collect_host_validated_traceability(
                     "allowed_values": design_reference_candidates,
                 },
                 "implementation_references": {
-                    "allowed_values": verification.changed_files,
+                    "allowed_values": implementation_reference_candidates,
                 },
                 "test_case_ids": {
                     "allowed_values": [item.id for item in verification.executed_test_cases],
@@ -289,6 +300,13 @@ async def _collect_host_validated_traceability(
         for reference in mapping.design_references
     ):
         raise ValueError("design reference is not in the host-approved candidate set")
+    allowed_implementation_references = set(implementation_reference_candidates)
+    if any(
+        reference not in allowed_implementation_references
+        for mapping in developer_result.requirement_implementations
+        for reference in mapping.implementation_references
+    ):
+        raise ValueError("implementation reference is not in the host-approved candidate set")
     developer_result = developer_result.model_copy(
         update={"changed_files": list(verification.changed_files)}
     )

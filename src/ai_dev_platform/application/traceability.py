@@ -171,6 +171,53 @@ def collect_design_reference_candidates(
     return sorted(candidates)
 
 
+def _git_object_exists(root: Path, object_name: str) -> bool:
+    safe_directory = f"safe.directory={root.resolve().as_posix()}"
+    try:
+        result = subprocess.run(
+            ["git", "-c", safe_directory, "cat-file", "-e", object_name],
+            cwd=root,
+            capture_output=True,
+            check=False,
+            timeout=30,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("implementation reference candidate collection failed") from exc
+    return result.returncode == 0
+
+
+def collect_implementation_reference_candidates(
+    root: Path,
+    changed_files: list[str],
+    *,
+    protected_patterns: list[str],
+    commit_sha: str | None = None,
+) -> list[str]:
+    """Return stable, unprotected changed files that exist at the target commit."""
+    root = root.resolve()
+    use_commit = commit_sha is not None and (root / ".git").exists()
+    if use_commit:
+        if re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha or "") is None:
+            raise ValueError("implementation reference candidate commit SHA is invalid")
+        if not _git_object_exists(root, f"{commit_sha}^{{commit}}"):
+            raise ValueError("implementation reference candidate collection failed")
+
+    candidates: set[str] = set()
+    for changed_file in changed_files:
+        relative, candidate = _repository_path(root, changed_file)
+        if _is_protected(relative, protected_patterns):
+            continue
+        exists = (
+            _git_object_exists(root, f"{commit_sha}:{relative}")
+            if use_commit
+            else candidate.is_file()
+        )
+        if exists:
+            candidates.add(relative)
+    return sorted(candidates)
+
+
 def _validated_file_reference(
     root: Path,
     reference: str,
