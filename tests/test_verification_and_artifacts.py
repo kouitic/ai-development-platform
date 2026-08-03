@@ -23,6 +23,7 @@ from ai_dev_platform.application.requirements import (
     parse_structured_issue_requirements,
     requirements_digest,
 )
+from ai_dev_platform.application.traceability import collect_design_reference_candidates
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig, load_config
 from ai_dev_platform.domain.models import (
@@ -101,6 +102,47 @@ def _git_project(tmp_path: Path) -> Path:
     return root
 
 
+def test_design_reference_candidates_are_commit_bound_and_unprotected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "design-references"
+    root.mkdir()
+    _run_git(root, "init")
+    _run_git(root, "config", "user.email", "test@example.invalid")
+    _run_git(root, "config", "user.name", "Test")
+    design_document = root / "docs" / "design" / "current.md"
+    protected_document = root / "docs" / "quality" / "protected.md"
+    design_document.parent.mkdir(parents=True)
+    protected_document.parent.mkdir(parents=True)
+    design_document.write_text(
+        "# 公開設計\n\n```markdown\n## コード例\n```\n\n## 実在する節 ##\n",
+        encoding="utf-8",
+    )
+    protected_document.write_text("# 内部基準\n", encoding="utf-8")
+    _run_git(root, "add", "docs")
+    _run_git(root, "commit", "-m", "add design documents")
+    commit_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    ).stdout.strip()
+    design_document.write_text("# 未コミットの見出し\n", encoding="utf-8")
+
+    candidates = collect_design_reference_candidates(
+        root,
+        protected_patterns=["docs/quality/**"],
+        commit_sha=commit_sha,
+    )
+
+    assert candidates == [
+        "docs/design/current.md#公開設計",
+        "docs/design/current.md#実在する節",
+    ]
+
+
 def _policy(*, passing: bool = True) -> VerificationPolicy:
     code = "raise SystemExit(0)" if passing else "raise SystemExit(1)"
     return VerificationPolicy(
@@ -176,7 +218,10 @@ def test_quality_gate_rejects_untrusted_verification_target_variants() -> None:
 
 
 def _traceability_result(
-    *, reported_files: list[str], implementation_reference: str
+    *,
+    reported_files: list[str],
+    implementation_reference: str,
+    design_reference: str = "docs/design/traceability.md#要件対応",
 ) -> AgentResult:
     developer = DeveloperResult(
         decision=Decision.PASS,
@@ -185,7 +230,7 @@ def _traceability_result(
         requirement_implementations=[
             RequirementImplementationReference(
                 requirement_id="BR-001",
-                design_references=["docs/design/traceability.md#要件対応"],
+                design_references=[design_reference],
                 implementation_references=[implementation_reference],
             )
         ],
@@ -285,17 +330,59 @@ def test_traceability_collection_normalizes_agent_files_from_host_verification(
         traceability_request.prompt
     )
     reference_contract = traceability_request.context["reference_contract"]
-    assert reference_contract == {
-        "design_references": {
-            "required_format": (
-                "docs/<repository-relative-document>.md#<existing-section-heading>"
-            ),
-            "example": "docs/design/traceability.md#要件対応",
-            "file_path_only_is_invalid": True,
-        },
-        "implementation_references": {"allowed_values": ["src/app.py"]},
-        "test_case_ids": {"allowed_values": ["tests/test_mock.py::test_required_behavior"]},
+    design_contract = reference_contract["design_references"]
+    assert design_contract["required_format"] == (
+        "docs/<repository-relative-document>.md#<existing-section-heading>"
+    )
+    assert design_contract["example"] == "docs/design/traceability.md#要件対応"
+    assert design_contract["file_path_only_is_invalid"] is True
+    assert "docs/design/traceability.md#要件対応" in design_contract["allowed_values"]
+    assert reference_contract["implementation_references"] == {"allowed_values": ["src/app.py"]}
+    assert reference_contract["test_case_ids"] == {
+        "allowed_values": ["tests/test_mock.py::test_required_behavior"]
     }
+
+
+@pytest.mark.parametrize(
+    "design_reference",
+    [
+        "docs/quality/protected.md#内部基準",
+        "docs/design/traceability.md#存在しない節",
+    ],
+)
+def test_traceability_collection_rejects_design_references_outside_host_candidates(
+    initialized_project: Path,
+    design_reference: str,
+) -> None:
+    protected_document = initialized_project / "docs" / "quality" / "protected.md"
+    protected_document.parent.mkdir(parents=True, exist_ok=True)
+    protected_document.write_text("# 保護文書\n\n## 内部基準\n", encoding="utf-8")
+    loaded, store, task, verification = _prepared_traceability_task(initialized_project)
+    provider = MockAgentProvider(
+        scripted_results=[
+            _traceability_result(
+                reported_files=["src/agent-reported.py"],
+                implementation_reference="src/app.py",
+                design_reference=design_reference,
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="host-approved candidate set"):
+        asyncio.run(
+            _collect_host_validated_traceability(
+                loaded,
+                provider,
+                store,
+                initialized_project,
+                task,
+                verification,
+            )
+        )
+    allowed_values = provider.requests[0].context["reference_contract"]["design_references"][
+        "allowed_values"
+    ]
+    assert "docs/quality/protected.md#内部基準" not in allowed_values
 
 
 def test_traceability_collection_still_rejects_unverified_agent_references(

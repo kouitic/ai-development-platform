@@ -19,6 +19,7 @@ from ai_dev_platform.application.requirements import (
 from ai_dev_platform.application.traceability import (
     assert_references_exist_at_commit,
     build_validated_traceability,
+    collect_design_reference_candidates,
 )
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
 from ai_dev_platform.config.loader import LoadedConfig
@@ -216,6 +217,13 @@ async def _collect_host_validated_traceability(
     definition = loaded.agents.get("developer")
     if requirements is None or definition is None:
         raise ValueError("developer traceability collection is not configured")
+    design_reference_candidates = collect_design_reference_candidates(
+        root,
+        protected_patterns=loaded.project.protected_paths,
+        commit_sha=task.commit_sha,
+    )
+    if not design_reference_candidates:
+        raise ValueError("no unprotected design reference candidates were found")
     request = AgentRequest(
         agent_id=definition.id,
         prompt=(
@@ -226,6 +234,7 @@ async def _collect_host_validated_traceability(
             "`#`と空でない既存の節見出しを含めてください。"
             "例: `docs/design/traceability.md#要件対応`。"
             "節のないファイルパスだけの設計参照は不正です。"
+            "design_referencesはreference_contractにあるallowed_valuesからだけ選んでください。"
         ),
         system_prompt=definition.system_prompt,
         context={
@@ -243,6 +252,7 @@ async def _collect_host_validated_traceability(
                     ),
                     "example": "docs/design/traceability.md#要件対応",
                     "file_path_only_is_invalid": True,
+                    "allowed_values": design_reference_candidates,
                 },
                 "implementation_references": {
                     "allowed_values": verification.changed_files,
@@ -272,6 +282,13 @@ async def _collect_host_validated_traceability(
     if provider_result.status != AgentRunStatus.SUCCESS:
         raise ValueError(_developer_traceability_failure_message(provider_result))
     developer_result = DeveloperResult.model_validate(provider_result.output)
+    allowed_design_references = set(design_reference_candidates)
+    if any(
+        reference not in allowed_design_references
+        for mapping in developer_result.requirement_implementations
+        for reference in mapping.design_references
+    ):
+        raise ValueError("design reference is not in the host-approved candidate set")
     developer_result = developer_result.model_copy(
         update={"changed_files": list(verification.changed_files)}
     )

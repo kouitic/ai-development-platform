@@ -19,6 +19,10 @@ from ai_dev_platform.domain.models import (
     VerificationStatus,
 )
 
+_MARKDOWN_ATX_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$")
+_MARKDOWN_CLOSING_HASHES = re.compile(r"[ \t]+#+[ \t]*$")
+_MARKDOWN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
 
 def _repository_path(root: Path, value: str) -> tuple[str, Path]:
     normalized = value.replace("\\", "/")
@@ -40,6 +44,131 @@ def _repository_path(root: Path, value: str) -> tuple[str, Path]:
 
 def _is_protected(path: str, protected_patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in protected_patterns)
+
+
+def _markdown_headings(content: str) -> list[str]:
+    """Return ATX headings while ignoring heading-like text in fenced code blocks."""
+    headings: list[str] = []
+    fence_character = ""
+    fence_length = 0
+    for line in content.splitlines():
+        fence_match = _MARKDOWN_FENCE.match(line)
+        if fence_match is not None:
+            marker = fence_match.group(1)
+            if not fence_character:
+                fence_character = marker[0]
+                fence_length = len(marker)
+                continue
+            if marker[0] == fence_character and len(marker) >= fence_length:
+                fence_character = ""
+                fence_length = 0
+                continue
+        if fence_character:
+            continue
+        heading_match = _MARKDOWN_ATX_HEADING.match(line)
+        if heading_match is None:
+            continue
+        heading = _MARKDOWN_CLOSING_HASHES.sub("", heading_match.group(1)).strip()
+        if heading:
+            headings.append(heading)
+    return headings
+
+
+def _documents_from_worktree(root: Path, protected_patterns: list[str]) -> list[tuple[str, str]]:
+    docs_root = root / "docs"
+    if not docs_root.is_dir():
+        return []
+    documents: list[tuple[str, str]] = []
+    for candidate in docs_root.rglob("*.md"):
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        relative, resolved = _repository_path(root, candidate.relative_to(root).as_posix())
+        if _is_protected(relative, protected_patterns):
+            continue
+        documents.append((relative, resolved.read_text(encoding="utf-8")))
+    return documents
+
+
+def _documents_from_commit(
+    root: Path, commit_sha: str, protected_patterns: list[str]
+) -> list[tuple[str, str]]:
+    if re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha) is None:
+        raise ValueError("design reference candidate commit SHA is invalid")
+    safe_directory = f"safe.directory={root.resolve().as_posix()}"
+    try:
+        listing = subprocess.run(
+            [
+                "git",
+                "-c",
+                safe_directory,
+                "ls-tree",
+                "-rz",
+                "--name-only",
+                commit_sha,
+                "--",
+                "docs",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=False,
+            timeout=30,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("design reference candidate collection failed") from exc
+    if listing.returncode != 0:
+        raise ValueError("design reference candidate collection failed")
+    try:
+        paths = [value.decode("utf-8") for value in listing.stdout.split(b"\0") if value]
+    except UnicodeDecodeError as exc:
+        raise ValueError("design reference path is not valid UTF-8") from exc
+
+    documents: list[tuple[str, str]] = []
+    for path in paths:
+        relative, _ = _repository_path(root, path)
+        if not relative.startswith("docs/") or not relative.endswith(".md"):
+            continue
+        if _is_protected(relative, protected_patterns):
+            continue
+        try:
+            content = subprocess.run(
+                ["git", "-c", safe_directory, "show", f"{commit_sha}:{relative}"],
+                cwd=root,
+                capture_output=True,
+                check=False,
+                timeout=30,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError("design reference candidate collection failed") from exc
+        if content.returncode != 0:
+            raise ValueError("design reference candidate collection failed")
+        try:
+            documents.append((relative, content.stdout.decode("utf-8")))
+        except UnicodeDecodeError as exc:
+            raise ValueError("design reference document is not valid UTF-8") from exc
+    return documents
+
+
+def collect_design_reference_candidates(
+    root: Path,
+    *,
+    protected_patterns: list[str],
+    commit_sha: str | None = None,
+) -> list[str]:
+    """Build stable references from real headings in unprotected Markdown documents."""
+    root = root.resolve()
+    documents = (
+        _documents_from_commit(root, commit_sha, protected_patterns)
+        if commit_sha is not None and (root / ".git").exists()
+        else _documents_from_worktree(root, protected_patterns)
+    )
+    candidates = {
+        f"{path}#{heading}"
+        for path, content in documents
+        for heading in _markdown_headings(content)
+    }
+    return sorted(candidates)
 
 
 def _validated_file_reference(
