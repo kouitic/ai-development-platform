@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import subprocess
@@ -13,6 +14,7 @@ from ai_dev_platform.application.quality_artifacts import (
 )
 from ai_dev_platform.application.quality_gate import (
     _assert_verification_target,
+    _collect_host_validated_traceability,
     _developer_traceability_failure_message,
     prepare_quality_task,
     run_integrated_quality_gates,
@@ -22,8 +24,9 @@ from ai_dev_platform.application.requirements import (
     requirements_digest,
 )
 from ai_dev_platform.application.workflow_runner import WorkflowRunner
-from ai_dev_platform.config.loader import load_config
+from ai_dev_platform.config.loader import LoadedConfig, load_config
 from ai_dev_platform.domain.models import (
+    AcceptanceCriterionTestMapping,
     AgentResult,
     AgentRunStatus,
     ChangedFile,
@@ -32,6 +35,7 @@ from ai_dev_platform.domain.models import (
     EvidenceReference,
     ExecutedTestCase,
     PullRequestData,
+    RequirementImplementationReference,
     ReviewType,
     TaskEvidence,
     TaskRecord,
@@ -168,6 +172,140 @@ def test_quality_gate_rejects_untrusted_verification_target_variants() -> None:
             result.model_copy(update={"results": []}),
             commit_sha="a" * 40,
             changed_files=["src/app.py"],
+        )
+
+
+def _traceability_result(
+    *, reported_files: list[str], implementation_reference: str
+) -> AgentResult:
+    developer = DeveloperResult(
+        decision=Decision.PASS,
+        summary="Traceability mappings collected.",
+        changed_files=reported_files,
+        requirement_implementations=[
+            RequirementImplementationReference(
+                requirement_id="BR-001",
+                design_references=["docs/design/traceability.md#要件対応"],
+                implementation_references=[implementation_reference],
+            )
+        ],
+        acceptance_criterion_test_mappings=[
+            AcceptanceCriterionTestMapping(
+                requirement_id="BR-001",
+                acceptance_criterion="Trusted verification passes",
+                test_case_ids=["tests/test_mock.py::test_required_behavior"],
+            )
+        ],
+    )
+    return AgentResult(
+        status=AgentRunStatus.SUCCESS,
+        output=developer.model_dump(mode="json"),
+    )
+
+
+def _prepared_traceability_task(
+    initialized_project: Path,
+) -> tuple[LoadedConfig, SQLiteStateStore, TaskRecord, VerificationResult]:
+    loaded = load_config(initialized_project)
+    store = SQLiteStateStore(
+        initialized_project / ".ai-dev" / "local" / "traceability-normalization.sqlite3"
+    )
+    gateway = MockGitHubGateway()
+    gateway.issues[41] = {
+        "title": "Issue",
+        "body": """```yaml
+requirements:
+  - id: BR-001
+    type: BUSINESS
+    description: Review the implementation
+    acceptance_criteria:
+      - Trusted verification passes
+    required: true
+```""",
+        "labels": [],
+    }
+    gateway.pull_requests[7] = PullRequestData(
+        number=7,
+        title="PR",
+        head_branch="ai/issue-41-review",
+        base_branch="main",
+        head_sha="a" * 40,
+    ).model_dump(mode="json")
+    gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
+    (initialized_project / "src").mkdir(exist_ok=True)
+    (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    requirement_items = parse_structured_issue_requirements(
+        str(gateway.issues[41]["body"]), source_reference="mock://issues/41"
+    )
+    gateway.add_issue_comment(
+        41,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirement_items)}",
+    )
+    verification = _trusted_result("a" * 40, ["src/app.py"], "reviewed diff")
+    task = prepare_quality_task(
+        store,
+        gateway,
+        initialized_project,
+        issue_number=41,
+        pull_request_number=7,
+        stage=WorkflowState.SYSTEM_REVIEW,
+        verification=verification,
+    )
+    return loaded, store, task, verification
+
+
+def test_traceability_collection_normalizes_agent_files_from_host_verification(
+    initialized_project: Path,
+) -> None:
+    loaded, store, task, verification = _prepared_traceability_task(initialized_project)
+    provider = MockAgentProvider(
+        scripted_results=[
+            _traceability_result(
+                reported_files=["src/agent-reported.py"],
+                implementation_reference="src/app.py",
+            )
+        ]
+    )
+
+    updated = asyncio.run(
+        _collect_host_validated_traceability(
+            loaded,
+            provider,
+            store,
+            initialized_project,
+            task,
+            verification,
+        )
+    )
+
+    assert updated.evidence.developer_results[-1].changed_files == ["src/app.py"]
+    assert updated.evidence.traceability[0].implementation_references == ["file:src/app.py"]
+
+
+def test_traceability_collection_still_rejects_unverified_agent_references(
+    initialized_project: Path,
+) -> None:
+    loaded, store, task, verification = _prepared_traceability_task(initialized_project)
+    (initialized_project / "src" / "unverified.py").write_text("value = 2\n", encoding="utf-8")
+    provider = MockAgentProvider(
+        scripted_results=[
+            _traceability_result(
+                reported_files=["src/agent-reported.py"],
+                implementation_reference="src/unverified.py",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="not part of the verified change"):
+        asyncio.run(
+            _collect_host_validated_traceability(
+                loaded,
+                provider,
+                store,
+                initialized_project,
+                task,
+                verification,
+            )
         )
 
 

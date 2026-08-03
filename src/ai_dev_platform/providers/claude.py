@@ -21,6 +21,33 @@ from ai_dev_platform.security.paths import (
 )
 from ai_dev_platform.security.runtime import NetworkPolicy, PolicyViolation
 
+_SDK_TOOL_BY_PLATFORM_TOOL = {
+    "Read": "Read",
+    "Glob": "Glob",
+    "Grep": "Grep",
+    "Write": "Write",
+    "Edit": "Edit",
+    "WebRead": "WebFetch",
+}
+
+
+def _sdk_allowed_tools(platform_tools: list[str]) -> list[str]:
+    """Translate only supported platform tools into Claude SDK built-ins."""
+    return list(
+        dict.fromkeys(
+            _SDK_TOOL_BY_PLATFORM_TOOL[tool]
+            for tool in platform_tools
+            if tool in _SDK_TOOL_BY_PLATFORM_TOOL
+        )
+    )
+
+
+def _sdk_disallowed_tools(platform_tools: list[str]) -> list[str]:
+    """Translate known aliases while preserving additional explicit denials."""
+    return list(
+        dict.fromkeys(_SDK_TOOL_BY_PLATFORM_TOOL.get(tool, tool) for tool in platform_tools)
+    )
+
 
 class ClaudeAgentProvider:
     """Execute requests through the optional Claude Agent SDK runtime."""
@@ -118,10 +145,13 @@ class ClaudeAgentProvider:
             "allowAllUnixSockets": False,
             "allowLocalBinding": False,
         }
+        sdk_allowed_tools = _sdk_allowed_tools(request.allowed_tools)
         options_kwargs: dict[str, Any] = {
             "system_prompt": request.system_prompt,
-            "allowed_tools": request.allowed_tools,
-            "disallowed_tools": request.forbidden_tools,
+            "tools": sdk_allowed_tools,
+            # Do not bypass the runtime permission callback for prompt-gated tools.
+            "allowed_tools": [],
+            "disallowed_tools": _sdk_disallowed_tools(request.forbidden_tools),
             "max_turns": request.max_turns,
             "permission_mode": "default",
             "can_use_tool": can_use_tool,

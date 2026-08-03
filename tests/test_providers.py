@@ -87,6 +87,31 @@ def test_claude_provider_streams_prompt_for_permission_callback(
     assert result.status == AgentRunStatus.SUCCESS
 
 
+def test_claude_provider_exposes_only_supported_allowed_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**kwargs: object):
+        options = kwargs["options"]
+        assert options.kwargs["tools"] == ["Read", "WebFetch"]
+        assert options.kwargs["allowed_tools"] == []
+        assert options.kwargs["disallowed_tools"] == ["WebFetch", "Write"]
+        assert "Bash" not in options.kwargs["tools"]
+        yield SimpleNamespace(
+            content=[],
+            structured_output={"decision": "PASS", "summary": "ok"},
+        )
+
+    fake_sdk(monkeypatch, query)
+    restricted_request = request().model_copy(
+        update={
+            "allowed_tools": ["Read", "WebRead", "Bash"],
+            "forbidden_tools": ["WebRead", "Write"],
+        }
+    )
+    result = asyncio.run(ClaudeAgentProvider().execute(restricted_request))
+    assert result.status == AgentRunStatus.SUCCESS
+
+
 def test_claude_provider_keeps_text_json_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     async def query(**_: object):
         yield SimpleNamespace(

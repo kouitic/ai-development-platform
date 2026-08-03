@@ -252,8 +252,9 @@ async def _collect_host_validated_traceability(
     if provider_result.status != AgentRunStatus.SUCCESS:
         raise ValueError(_developer_traceability_failure_message(provider_result))
     developer_result = DeveloperResult.model_validate(provider_result.output)
-    if sorted(developer_result.changed_files) != sorted(verification.changed_files):
-        raise ValueError("developer traceability files do not match trusted verification")
+    developer_result = developer_result.model_copy(
+        update={"changed_files": list(verification.changed_files)}
+    )
     traces = build_validated_traceability(
         root.resolve(),
         requirements,

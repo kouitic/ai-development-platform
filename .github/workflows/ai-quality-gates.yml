@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0、Node.js 24対応
         with:
           python-version: "3.12"
+      - name: Install Claude sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap socat
       - name: Install
         run: uv sync --frozen --extra dev --extra claude
       - name: Validate governed configuration

@@ -63,6 +63,19 @@ def test_gitleaks_actions_receive_the_automatic_github_token() -> None:
         assert "results.sarif" in gitignore
 
 
+def test_quality_workflows_install_claude_sandbox_dependencies() -> None:
+    workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    for workflow_root in workflow_roots:
+        quality = (workflow_root / ".github" / "workflows" / "ai-quality-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "sudo apt-get update" in quality
+        assert "sudo apt-get install --yes --no-install-recommends bubblewrap socat" in quality
+        assert quality.index("bubblewrap socat") < quality.index(
+            "uv sync --frozen --extra dev --extra claude"
+        )
+
+
 def test_manual_claude_workflow_uses_approved_issue_preflight_without_self_attestation() -> None:
     workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
     forbidden = [
