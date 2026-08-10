@@ -65,9 +65,16 @@ Claude結果は次の順で処理する。
 | `REJECTED / invalid_output_schema` | ホストが構成した正式Schema自体が不正 | しない |
 | `REJECTED / invalid_structured_output` | Claude結果を復号できない、または正式Schemaに不一致 | 実施済みの場合がある |
 | `ERROR / provider_api_error_<status>` | Claude APIが要求をHTTPエラーとして拒否 | 実施済み |
+| `ERROR / provider_api_error_400_model_unsupported` | 選択モデルがStructured Outputsに対応していないと安全に分類できた | 実施済み |
+| `ERROR / provider_api_error_400_schema_rejected` | 転送Schemaのコンパイル・検証拒否と安全に分類できた | 実施済み |
+| `ERROR / provider_api_error_400_structured_output_unsupported` | Structured Outputsのパラメーター非対応と安全に分類できた | 実施済み |
+| `ERROR / provider_api_error_400_invalid_request` | 400だが安全な分類条件に一致しない | 実施済み |
+| `ERROR / provider_structured_output_retries_exhausted` | SDKが有効な構造化結果を生成できず再試行上限へ到達 | 実施済み |
 | `TIMEOUT / provider_timeout` | 設定時間内に完了しない | 実施済み |
 
-Providerの例外本文、応答本文、Secret、未マスク入力を`AgentResult.summary`や通常ログへ含めない。
+400の分類にはSDKの`api_error_status`、`subtype`、`errors`を使用するが、`errors`は固定語句との照合にだけ使用する。Providerの例外本文、応答本文、`errors`本文、Secret、未マスク入力を`AgentResult.summary`や通常ログへ含めない。
+
+Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2.134へ固定する。この版に同梱されるClaude CLI 2.1.226を使用し、Structured Outputsの起動時Schema検証を備えるCLI 2.1.205以降を必須とする。
 
 ## 6. 変更時の契約試験
 
@@ -78,5 +85,6 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - 有効な`result_json`を復号し、正式Schema一致時だけ成功する。
 - 不正JSON、正式Schema不一致、不正な正式Schemaを区別して拒否する。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
+- 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
 
 実Claude受入では、API要求が受理されたことだけで合格にしない。復号後のstage別結果、ホスト検証、同一commit SHAの品質ゲートまで成功した証拠を残す。

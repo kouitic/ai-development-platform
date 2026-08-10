@@ -33,6 +33,70 @@ _SDK_TOOL_BY_PLATFORM_TOOL = {
 
 _CLAUDE_RESULT_JSON_FIELD = "result_json"
 
+_SAFE_RESULT_SUBTYPE_CODES = {
+    "error_during_execution": "provider_execution_error",
+    "error_max_budget_usd": "provider_budget_exhausted",
+    "error_max_structured_output_retries": "provider_structured_output_retries_exhausted",
+    "error_max_turns": "provider_max_turns",
+}
+
+
+def _safe_api_error_detail(errors: Any) -> str:
+    """Classify a 400 response without exposing the provider's error text."""
+    if not isinstance(errors, list):
+        return "invalid_request"
+    normalized = "\n".join(item.casefold()[:4096] for item in errors if isinstance(item, str))
+    if not normalized:
+        return "invalid_request"
+
+    structured_output_terms = (
+        "structured output",
+        "structured_output",
+        "output format",
+        "output_format",
+        "json schema",
+        "json_schema",
+    )
+    unsupported_terms = (
+        "does not support",
+        "doesn't support",
+        "not supported",
+        "unsupported",
+        "unrecognized",
+        "unknown parameter",
+    )
+    if (
+        "model" in normalized
+        and any(term in normalized for term in structured_output_terms)
+        and any(term in normalized for term in unsupported_terms)
+    ):
+        return "model_unsupported"
+    if "schema" in normalized and any(
+        term in normalized
+        for term in ("compile", "compilation", "invalid", "rejected", "validation")
+    ):
+        return "schema_rejected"
+    if any(term in normalized for term in structured_output_terms) and any(
+        term in normalized for term in unsupported_terms
+    ):
+        return "structured_output_unsupported"
+    return "invalid_request"
+
+
+def _safe_provider_error_code(message: Any) -> str:
+    """Return an allowlisted provider error code derived from safe SDK fields."""
+    api_error_status = getattr(message, "api_error_status", None)
+    if isinstance(api_error_status, int) and not isinstance(api_error_status, bool):
+        code = f"provider_api_error_{api_error_status}"
+        if api_error_status == 400:
+            code += f"_{_safe_api_error_detail(getattr(message, 'errors', None))}"
+        return code
+
+    subtype = getattr(message, "subtype", None)
+    if isinstance(subtype, str):
+        return _SAFE_RESULT_SUBTYPE_CODES.get(subtype, "provider_result_error")
+    return "provider_result_error"
+
 
 def _claude_output_transport_schema() -> dict[str, Any]:
     """Return the small Claude-compatible envelope used at the provider boundary."""
@@ -263,13 +327,7 @@ class ClaudeAgentProvider:
                         structured_output = message_structured_output
                         has_structured_output = True
                     if getattr(message, "is_error", False) is True:
-                        api_error_status = getattr(message, "api_error_status", None)
-                        if isinstance(api_error_status, int) and not isinstance(
-                            api_error_status, bool
-                        ):
-                            provider_error_code = f"provider_api_error_{api_error_status}"
-                        else:
-                            provider_error_code = "provider_result_error"
+                        provider_error_code = _safe_provider_error_code(message)
         except TimeoutError:
             return AgentResult(
                 status=AgentRunStatus.TIMEOUT,

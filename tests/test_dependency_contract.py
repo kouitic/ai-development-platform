@@ -18,7 +18,7 @@ def test_claude_sdk_is_optional_and_python_range_is_explicit() -> None:
     project = configuration["project"]
     assert project["requires-python"] == ">=3.12,<3.14"
     assert not any(value.startswith("claude-agent-sdk") for value in project["dependencies"])
-    assert project["optional-dependencies"]["claude"] == ["claude-agent-sdk>=0.1,<0.2"]
+    assert project["optional-dependencies"]["claude"] == ["claude-agent-sdk>=0.2.134,<0.3"]
     assert "**/*.zip" in configuration["tool"]["hatch"]["build"]["exclude"]
 
 
@@ -32,6 +32,10 @@ def test_lock_file_preserves_optional_claude_dependency() -> None:
     assert "claude-agent-sdk" not in default_dependencies
     assert "claude = [" in project_block
     assert '{ name = "claude-agent-sdk" }' in project_block
+    assert re.search(
+        r'\[\[package\]\]\r?\nname = "claude-agent-sdk"\r?\nversion = "0\.2\.134"',
+        lock,
+    )
 
 
 def test_ci_runs_clean_install_contract_on_python_312_and_313() -> None:

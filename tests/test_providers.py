@@ -278,6 +278,67 @@ def test_claude_provider_classifies_api_error_without_details(
     assert "provider detail" not in result.summary
 
 
+@pytest.mark.parametrize(
+    ("errors", "expected_code"),
+    [
+        (
+            ["The selected model does not support structured outputs."],
+            "provider_api_error_400_model_unsupported",
+        ),
+        (
+            ["Invalid JSON schema: schema compilation failed."],
+            "provider_api_error_400_schema_rejected",
+        ),
+        (
+            ["The output_format parameter is not supported."],
+            "provider_api_error_400_structured_output_unsupported",
+        ),
+        (
+            ["sensitive provider request detail"],
+            "provider_api_error_400_invalid_request",
+        ),
+    ],
+)
+def test_claude_provider_classifies_api_400_without_exposing_details(
+    monkeypatch: pytest.MonkeyPatch,
+    errors: list[str],
+    expected_code: str,
+) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[],
+            is_error=True,
+            subtype="success",
+            api_error_status=400,
+            errors=errors,
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.ERROR
+    assert result.error_code == expected_code
+    assert all(detail not in result.summary for detail in errors)
+
+
+def test_claude_provider_classifies_structured_output_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[],
+            is_error=True,
+            subtype="error_max_structured_output_retries",
+            api_error_status=None,
+            errors=["sensitive validation detail"],
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.ERROR
+    assert result.error_code == "provider_structured_output_retries_exhausted"
+    assert "validation detail" not in result.summary
+
+
 def test_claude_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     async def query(**_: object):
         await asyncio.sleep(0.05)

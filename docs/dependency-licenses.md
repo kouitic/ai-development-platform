@@ -1,6 +1,6 @@
 # 依存ライセンス記録
 
-2026-08-02に`uv.lock`のruntime直接依存と`claude` optional依存について`pip-licenses`で確認した結果です。Claude SDKはMock-only installには含まれません。
+2026-08-10に`uv.lock`のruntime直接依存と`claude` optional依存について`pip-licenses`で確認した結果です。Claude SDKはMock-only installには含まれません。
 
 | Package | Version | License |
 |---|---:|---|
@@ -16,7 +16,7 @@
 
 | Package | Version | License |
 |---|---:|---|
-| claude-agent-sdk | 0.1.81 | MIT License |
+| claude-agent-sdk | 0.2.134 | MIT License |
 
 本リポジトリ自体はPrivate useで、ライセンスは未選択です。外部公開または配布前に、runtime/dev/transitive依存のlock時点のライセンス、NOTICE要否、配布条件を再確認してください。
 
