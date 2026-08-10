@@ -339,6 +339,80 @@ def test_claude_provider_classifies_structured_output_retry_exhaustion(
     assert "validation detail" not in result.summary
 
 
+def test_claude_provider_preflight_progressively_adds_interface_features(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_options: list[dict[str, object]] = []
+
+    async def query(**kwargs: object):
+        options = kwargs["options"]
+        observed_options.append(options.kwargs)
+        prompt = kwargs["prompt"]
+        if len(observed_options) < 3:
+            assert isinstance(prompt, str)
+        else:
+            assert not isinstance(prompt, str)
+            messages = [message async for message in prompt]
+            assert messages[0]["session_id"] == "ai-dev-provider-preflight"
+        yield SimpleNamespace(
+            is_error=False,
+            structured_output=(
+                None if len(observed_options) == 1 else {"result_json": '{"ok":true}'}
+            ),
+        )
+
+    fake_sdk(monkeypatch, query)
+    results = asyncio.run(ClaudeAgentProvider().preflight(root=tmp_path))
+
+    assert [result.stage for result in results] == [
+        "basic",
+        "structured_output",
+        "runtime_controls",
+    ]
+    assert all(result.status == "PASS" for result in results)
+    assert observed_options[0]["tools"] == []
+    assert "output_format" not in observed_options[0]
+    assert observed_options[1]["output_format"] == observed_options[2]["output_format"]
+    assert observed_options[2]["tools"] == ["Read", "Glob", "Grep"]
+    assert observed_options[2]["allowed_tools"] == []
+    assert observed_options[2]["sandbox"]["enabled"] is True
+    assert all(options["max_turns"] == 1 for options in observed_options)
+    assert all(options["max_budget_usd"] == 0.05 for options in observed_options)
+
+
+def test_claude_provider_preflight_stops_and_suppresses_error_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    sensitive_detail = "sensitive-provider-message-must-not-persist"
+
+    async def query(**_: object):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield SimpleNamespace(is_error=False)
+        else:
+            yield SimpleNamespace(
+                is_error=True,
+                subtype="success",
+                api_error_status=400,
+                errors=[sensitive_detail],
+            )
+
+    fake_sdk(monkeypatch, query)
+    results = asyncio.run(ClaudeAgentProvider().preflight(root=tmp_path))
+
+    assert calls == 2
+    assert [result.status for result in results] == ["PASS", "ERROR"]
+    assert results[-1].stage == "structured_output"
+    assert results[-1].error_code == "provider_api_error_400_invalid_request"
+    assert sensitive_detail not in json.dumps(
+        [result.model_dump(mode="json") for result in results]
+    )
+
+
 def test_claude_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     async def query(**_: object):
         await asyncio.sleep(0.05)

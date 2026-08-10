@@ -149,6 +149,58 @@ class AgentRunStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class ProviderPreflightStageResult(StrictModel):
+    """Sanitized result for one progressively richer provider request."""
+
+    stage: Literal["basic", "structured_output", "runtime_controls"]
+    status: Literal["PASS", "ERROR"]
+    error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
+
+    @model_validator(mode="after")
+    def error_code_matches_status(self) -> ProviderPreflightStageResult:
+        """Require one safe code only for a failed diagnostic stage."""
+        if self.status == "ERROR" and self.error_code is None:
+            raise ValueError("failed provider preflight stage requires an error code")
+        if self.status == "PASS" and self.error_code is not None:
+            raise ValueError("passed provider preflight stage cannot have an error code")
+        return self
+
+
+class ProviderPreflightReport(StrictModel):
+    """Secret-free provider diagnostic evidence bound to one commit."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    provider: Literal["mock", "claude"]
+    commit_sha: str = Field(min_length=7, max_length=64, pattern=r"^[0-9a-z]+$")
+    overall_status: Literal["PASS", "ERROR", "SKIPPED"]
+    stages: list[ProviderPreflightStageResult] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def status_matches_stages(self) -> ProviderPreflightReport:
+        """Keep skipped, passed, and failed reports internally consistent."""
+        if self.overall_status == "SKIPPED":
+            if self.provider != "mock" or self.stages:
+                raise ValueError("only Mock preflight without stages may be skipped")
+            return self
+        if self.provider != "claude" or not self.stages:
+            raise ValueError("Claude preflight requires at least one stage")
+        expected_stages = ("basic", "structured_output", "runtime_controls")
+        observed_stages = tuple(stage.stage for stage in self.stages)
+        if observed_stages != expected_stages[: len(observed_stages)]:
+            raise ValueError("provider preflight stages are out of order")
+        failed_indexes = [
+            index for index, stage in enumerate(self.stages) if stage.status == "ERROR"
+        ]
+        has_error = bool(failed_indexes)
+        if (self.overall_status == "ERROR") != has_error:
+            raise ValueError("provider preflight status does not match its stages")
+        if failed_indexes and failed_indexes != [len(self.stages) - 1]:
+            raise ValueError("provider preflight must stop at its first failed stage")
+        if self.overall_status == "PASS" and len(self.stages) != 3:
+            raise ValueError("passed provider preflight requires all three stages")
+        return self
+
+
 class InteractionSettings(StrictModel):
     """Human interaction frequency; mandatory gates are unaffected."""
 

@@ -42,6 +42,14 @@ jobs:
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0、Node.js 24対応
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Provider interface preflight
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}
+          AI_DEV_GITHUB_GATEWAY: gh
+        run: >-
+          uv run ai-dev provider-preflight
+          --artifact .ai-dev/local/quality-artifacts/provider-preflight.json
       - name: Resolve linked Issue
         env:
           GH_TOKEN: ${{ github.token }}

@@ -22,6 +22,15 @@ def test_claude_sdk_is_optional_and_python_range_is_explicit() -> None:
     assert "**/*.zip" in configuration["tool"]["hatch"]["build"]["exclude"]
 
 
+def test_pytest_temp_variants_are_excluded_from_source_and_lint() -> None:
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "/.pytest-tmp*/**" in configuration["tool"]["hatch"]["build"]["exclude"]
+    assert ".pytest-tmp*" in configuration["tool"]["ruff"]["exclude"]
+    for project_root in [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]:
+        gitignore = (project_root / ".gitignore").read_text(encoding="utf-8")
+        assert ".pytest-tmp*/" in gitignore
+
+
 def test_lock_file_preserves_optional_claude_dependency() -> None:
     lock = (ROOT / "uv.lock").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.12, <3.14"' in lock
@@ -78,6 +87,22 @@ def test_quality_workflows_install_claude_sandbox_dependencies() -> None:
         assert quality.index("bubblewrap socat") < quality.index(
             "uv sync --frozen --extra dev --extra claude"
         )
+
+
+def test_quality_workflows_run_sanitized_provider_preflight_before_quality_gates() -> None:
+    workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    for workflow_root in workflow_roots:
+        quality = (workflow_root / ".github" / "workflows" / "ai-quality-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "uv run ai-dev provider-preflight" in quality
+        assert "provider-preflight.json" in quality
+        assert (
+            "AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}"
+            in quality
+        )
+        assert quality.index("Secret history scan") < quality.index("provider-preflight")
+        assert quality.index("provider-preflight") < quality.index("ai-dev quality-gates")
 
 
 def test_manual_claude_workflow_uses_approved_issue_preflight_without_self_attestation() -> None:

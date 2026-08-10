@@ -31,3 +31,12 @@ Issue、stage、commit SHA、承認者が必要です。対象SHAがタスクの
 ## Claude/GitHub APIエラー
 
 外部詳細や資格情報を表示せず、安全停止します。Mockでローカル再現し、ネットワーク、認証、有効期限、SDK/CLI互換を別々に確認します。mainや本番への迂回操作は行いません。
+
+PR用の統合Workflowでは`provider-preflight`が正式な品質ゲートより先に実行されます。`provider-preflight.json`の`stage`と`error_code`だけを確認し、Providerのエラー本文をログやArtifactへ追加しないでください。
+
+- `basic`失敗: API接続、資格情報に対応するHTTP status、選択モデル、最小要求を確認します。
+- `structured_output`失敗: 固定転送SchemaとStructured Outputs対応を確認します。
+- `runtime_controls`失敗: ツール定義、permission callback、sandbox設定を確認します。
+- 3段階成功後に正式品質ゲートが失敗: 正式Prompt、task context、Agent固有設定との差を確認します。
+
+診断は1段階0.05 USD以下、最大3段階です。再実行前に、対象commit SHAと既存Artifactを確認してください。

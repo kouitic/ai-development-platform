@@ -38,6 +38,7 @@ from ai_dev_platform.application.issue_preflight import (
     validate_approved_issue,
 )
 from ai_dev_platform.application.package_service import package_source, verify_source_package
+from ai_dev_platform.application.provider_preflight import write_provider_preflight_report
 from ai_dev_platform.application.quality_gate import (
     run_integrated_quality_gates,
     run_quality_gate,
@@ -49,6 +50,7 @@ from ai_dev_platform.config.loader import ConfigError, load_config
 from ai_dev_platform.domain.models import (
     AgentRequest,
     ChangedFile,
+    ProviderPreflightReport,
     PullRequestData,
     StageResult,
     TaskEvidence,
@@ -68,7 +70,9 @@ from ai_dev_platform.infrastructure.verification import (
     read_verification_result,
     write_verification_result,
 )
+from ai_dev_platform.providers.claude import ClaudeAgentProvider
 from ai_dev_platform.providers.factory import create_provider
+from ai_dev_platform.providers.mock import MockAgentProvider
 from ai_dev_platform.security.scanner import scan_tree
 
 app = typer.Typer(
@@ -970,6 +974,59 @@ def verify_commit_command(
         console.print("[red]Host verification failed.[/red]")
         raise typer.Exit(1)
     console.print(f"[green]Trusted verification written:[/green] {output.resolve()}")
+
+
+@app.command("provider-preflight")
+def provider_preflight_command(
+    artifact: Annotated[
+        Path,
+        typer.Option("--artifact", help="Sanitized provider preflight JSON"),
+    ] = Path(".ai-dev/local/quality-artifacts/provider-preflight.json"),
+    path: Annotated[Path, typer.Option("--path")] = Path("."),
+) -> None:
+    """Probe the configured provider without retaining prompts or response content."""
+    root = _root(path)
+    loaded = _load(root)
+    try:
+        provider = create_provider(loaded.project, root=root)
+        if isinstance(provider, MockAgentProvider):
+            report = ProviderPreflightReport(
+                provider="mock",
+                commit_sha=_current_sha(root),
+                overall_status="SKIPPED",
+            )
+        elif isinstance(provider, ClaudeAgentProvider):
+            developer = loaded.agents.get("developer")
+            stages = asyncio.run(
+                provider.preflight(
+                    root=root,
+                    model=developer.model if developer is not None else "default",
+                    timeout_seconds=loaded.project.workflow.timeout_minutes * 60,
+                    max_budget_usd=loaded.project.budget.per_task.stop_usd,
+                )
+            )
+            report = ProviderPreflightReport(
+                provider="claude",
+                commit_sha=_current_sha(root),
+                overall_status=(
+                    "ERROR" if any(stage.status == "ERROR" for stage in stages) else "PASS"
+                ),
+                stages=stages,
+            )
+        else:
+            raise ValueError("configured provider does not support preflight")
+        destination = write_provider_preflight_report(root, artifact, report)
+    except ValueError as exc:
+        console.print(f"[red]Provider preflight configuration failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if report.overall_status == "ERROR":
+        failed = next(stage for stage in report.stages if stage.status == "ERROR")
+        console.print(
+            f"[red]Provider preflight failed:[/red] stage={failed.stage}; code={failed.error_code}"
+        )
+        raise typer.Exit(1)
+    console.print(f"[green]Provider preflight {report.overall_status}:[/green] {destination}")
 
 
 @app.command("quality-gates")

@@ -76,7 +76,21 @@ Claude結果は次の順で処理する。
 
 Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2.134へ固定する。この版に同梱されるClaude CLI 2.1.226を使用し、Structured Outputsの起動時Schema検証を備えるCLI 2.1.205以降を必須とする。
 
-## 6. 変更時の契約試験
+## 6. Provider事前診断
+
+統合品質WorkflowはSecret履歴検査の後、正式な品質ゲートより前に`provider-preflight`を実行する。API資格情報がない場合はMockとして`SKIPPED`とし、外部APIを呼び出さない。Claudeの場合は失敗した時点で停止し、最大3回まで次を順番に確認する。
+
+| 段階 | 確認対象 |
+|---|---|
+| `basic` | ツールとStructured Outputsを使わない最小要求 |
+| `structured_output` | 固定の小さな転送Schemaを追加した要求 |
+| `runtime_controls` | Structured OutputsにRead系ツール定義、permission callback、sandboxを追加した要求 |
+
+各要求は1 turn、90秒以下、最大0.05 USDに制限する。診断中はツール利用を拒否し、応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / ERROR`、安全な固定エラーコードだけを含み、隣接するSHA-256 digestで完全性を確認できるようにする。Providerのエラー本文、応答本文、Prompt、Secret、費用明細は保存しない。
+
+3段階すべてが成功して正式要求だけが失敗する場合、接続、Structured Outputs、共通runtime controlsではなく、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
+
+## 7. 変更時の契約試験
 
 Claude IFを変更する場合は、少なくとも次を自動試験する。
 
@@ -86,5 +100,7 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - 不正JSON、正式Schema不一致、不正な正式Schemaを区別して拒否する。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
+- 事前診断が段階的に機能を追加し、最初の失敗で停止する。
+- 事前診断Artifactが`.ai-dev/local`外へ書き込めず、応答本文を含まない。
 
 実Claude受入では、API要求が受理されたことだけで合格にしない。復号後のstage別結果、ホスト検証、同一commit SHAの品質ゲートまで成功した証拠を残す。

@@ -156,6 +156,23 @@ def test_cli_init_validate_chat_run_approve_and_logs(tmp_path: Path) -> None:
     assert "state_transition" in logs.output
 
 
+def test_cli_provider_preflight_skips_mock_without_api_call(tmp_path: Path) -> None:
+    root = tmp_path / "preflight-project"
+    root.mkdir()
+    initialized = runner.invoke(app, ["init", "preflight-project", "--path", str(root)])
+    assert initialized.exit_code == 0, initialized.output
+
+    result = runner.invoke(app, ["provider-preflight", "--path", str(root)])
+
+    assert result.exit_code == 0, result.output
+    assert "SKIPPED" in result.output
+    artifact = root / ".ai-dev" / "local" / "quality-artifacts" / "provider-preflight.json"
+    payload = artifact.read_text(encoding="utf-8")
+    assert '"provider":"mock"' in payload
+    assert '"overall_status":"SKIPPED"' in payload
+    assert artifact.with_suffix(".json.sha256").is_file()
+
+
 def test_cli_init_conflict_and_missing_task(tmp_path: Path) -> None:
     root = tmp_path / "conflict"
     root.mkdir()

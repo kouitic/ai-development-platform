@@ -8,12 +8,17 @@ import json
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from jsonschema import Draft202012Validator, ValidationError, validate
 from jsonschema.exceptions import SchemaError
 
-from ai_dev_platform.domain.models import AgentRequest, AgentResult, AgentRunStatus
+from ai_dev_platform.domain.models import (
+    AgentRequest,
+    AgentResult,
+    AgentRunStatus,
+    ProviderPreflightStageResult,
+)
 from ai_dev_platform.security.paths import (
     assert_read_allowed,
     assert_write_allowed,
@@ -32,6 +37,9 @@ _SDK_TOOL_BY_PLATFORM_TOOL = {
 }
 
 _CLAUDE_RESULT_JSON_FIELD = "result_json"
+_PREFLIGHT_MAX_BUDGET_USD = 0.05
+_PREFLIGHT_TIMEOUT_SECONDS = 90.0
+ClaudePreflightStage = Literal["basic", "structured_output", "runtime_controls"]
 
 _SAFE_RESULT_SUBTYPE_CODES = {
     "error_during_execution": "provider_execution_error",
@@ -164,6 +172,165 @@ class ClaudeAgentProvider:
             "parent_tool_use_id": None,
             "session_id": f"ai-dev-{agent_id}",
         }
+
+    @staticmethod
+    async def _run_preflight_stage(
+        *,
+        stage: ClaudePreflightStage,
+        query: Any,
+        options: Any,
+        prompt: str | AsyncIterator[dict[str, Any]],
+        timeout_seconds: float,
+        require_structured_output: bool,
+    ) -> ProviderPreflightStageResult:
+        """Run one bounded probe and retain only a safe status code."""
+        result_seen = False
+        structured_output_seen = False
+        provider_error_code: str | None = None
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async for message in query(prompt=prompt, options=options):
+                    is_error = getattr(message, "is_error", None)
+                    if isinstance(is_error, bool):
+                        result_seen = True
+                        if getattr(message, "structured_output", None) is not None:
+                            structured_output_seen = True
+                        if is_error:
+                            provider_error_code = _safe_provider_error_code(message)
+        except TimeoutError:
+            provider_error_code = "provider_timeout"
+        except Exception:  # Provider exception text is intentionally discarded.
+            provider_error_code = provider_error_code or "provider_execution_exception"
+
+        if provider_error_code is None and not result_seen:
+            provider_error_code = "provider_preflight_incomplete"
+        if provider_error_code is None and require_structured_output and not structured_output_seen:
+            provider_error_code = "provider_structured_output_missing"
+        if provider_error_code is not None:
+            return ProviderPreflightStageResult(
+                stage=stage,
+                status="ERROR",
+                error_code=provider_error_code,
+            )
+        return ProviderPreflightStageResult(stage=stage, status="PASS")
+
+    async def preflight(
+        self,
+        *,
+        root: Path,
+        model: str = "default",
+        timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS,
+        max_budget_usd: float = _PREFLIGHT_MAX_BUDGET_USD,
+    ) -> list[ProviderPreflightStageResult]:
+        """Progressively isolate basic, structured-output, and runtime-control failures."""
+        try:
+            sdk = importlib.import_module("claude_agent_sdk")
+            claude_agent_options = sdk.ClaudeAgentOptions
+            query = sdk.query
+        except (ImportError, AttributeError):
+            return [
+                ProviderPreflightStageResult(
+                    stage="basic", status="ERROR", error_code="sdk_not_installed"
+                )
+            ]
+
+        try:
+            sdk_types = importlib.import_module("claude_agent_sdk.types")
+            permission_deny = sdk_types.PermissionResultDeny
+        except (ImportError, AttributeError):
+
+            def permission_deny(**kwargs: Any) -> dict[str, Any]:
+                return {"behavior": "deny", **kwargs}
+
+        async def deny_tool(_name: str, _input: dict[str, Any], _context: Any) -> Any:
+            return permission_deny(
+                message="Tools are disabled during provider preflight.", interrupt=False
+            )
+
+        bounded_timeout = min(timeout_seconds, _PREFLIGHT_TIMEOUT_SECONDS)
+        bounded_budget = min(max_budget_usd, _PREFLIGHT_MAX_BUDGET_USD)
+        selected_model = None if model == "default" else model
+        common_options: dict[str, Any] = {
+            "tools": [],
+            "max_turns": 1,
+            "max_budget_usd": bounded_budget,
+            "setting_sources": [],
+        }
+        if selected_model:
+            common_options["model"] = selected_model
+
+        transport_format = {
+            "type": "json_schema",
+            "schema": _claude_output_transport_schema(),
+        }
+        probes: list[tuple[ClaudePreflightStage, dict[str, Any], bool]] = [
+            ("basic", dict(common_options), False),
+            (
+                "structured_output",
+                {**common_options, "output_format": transport_format},
+                False,
+            ),
+            (
+                "runtime_controls",
+                {
+                    **common_options,
+                    "system_prompt": (
+                        "This is a connection preflight. Do not use tools or inspect files."
+                    ),
+                    "tools": ["Read", "Glob", "Grep"],
+                    "allowed_tools": [],
+                    "disallowed_tools": [
+                        "Write",
+                        "Edit",
+                        "Bash",
+                        "Shell",
+                        "WebFetch",
+                        "WebSearch",
+                    ],
+                    "permission_mode": "default",
+                    "can_use_tool": deny_tool,
+                    "cwd": root.resolve(),
+                    "sandbox": {
+                        "enabled": True,
+                        "autoAllowBashIfSandboxed": False,
+                        "allowUnsandboxedCommands": False,
+                        "network": {
+                            "allowedDomains": [],
+                            "allowManagedDomainsOnly": True,
+                            "allowUnixSockets": [],
+                            "allowAllUnixSockets": False,
+                            "allowLocalBinding": False,
+                        },
+                    },
+                    "output_format": transport_format,
+                },
+                True,
+            ),
+        ]
+
+        results: list[ProviderPreflightStageResult] = []
+        for stage, option_values, use_stream in probes:
+            prompt_text = (
+                "Return a result_json string containing the serialized JSON object "
+                '{"ok":true}. Do not use tools.'
+                if stage != "basic"
+                else "Reply with OK. Do not use tools."
+            )
+            prompt: str | AsyncIterator[dict[str, Any]] = prompt_text
+            if use_stream:
+                prompt = self._prompt_stream(prompt_text, "provider-preflight")
+            result = await self._run_preflight_stage(
+                stage=stage,
+                query=query,
+                options=claude_agent_options(**option_values),
+                prompt=prompt,
+                timeout_seconds=bounded_timeout,
+                require_structured_output=stage != "basic",
+            )
+            results.append(result)
+            if result.status == "ERROR":
+                break
+        return results
 
     async def execute(self, request: AgentRequest) -> AgentResult:
         """Run Claude with explicit tool, turn, timeout, and budget limits."""

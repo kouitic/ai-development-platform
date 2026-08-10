@@ -35,7 +35,7 @@ Secretや個人情報を含まない小さな変更IssueをIssue Formで作り�
 10. Claudeの構造化出力が[Agent Provider連携IF仕様](provider-interface.md)の固定`result_json`エンベロープで受理され、復号後のstage別結果が正式Schemaのホスト検証を通過することを確認する。`provider_api_error_400`が発生した場合は、転送Schemaを含むAPI要求拒否と、復号後の`invalid_structured_output`を区別して記録する。
 11. major FindingでCheckがfailureとなり、Finding ID付きで実装へ戻ることを確認する。
 12. 修正後の再レビューPASSまでFindingが未解決一覧から消えないことを確認する。
-13. 統合`ai-quality-gates.yml`が同一PR head SHAでSystem、Business、QAを一度ずつ順番に実行し、QAがtrusted verification、両レビュー、traceability、security scan、環境構成を統合することを確認する。各JSON ArtifactとSHA-256も照合する。
+13. 統合`ai-quality-gates.yml`がSecret履歴検査後に3段階のProvider事前診断を行い、同一PR head SHAでSystem、Business、QAを一度ずつ順番に実行し、QAがtrusted verification、両レビュー、traceability、security scan、環境構成を統合することを確認する。事前診断を含む各JSON ArtifactとSHA-256も照合する。
 14. QA条件付き合格が専用人間待ちとなり、最終承認を自動通過しないことを確認する。
 15. GitHub comment失敗、Check失敗、Secret検出をそれぞれ模擬し、工程が進まないことを確認する。
 

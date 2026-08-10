@@ -33,7 +33,7 @@ production-like-data/
 .uv-cache*/
 __pycache__/
 .pytest_cache/
-.pytest-tmp/
+.pytest-tmp*/
 .pip-audit-cache/
 .mypy_cache/
 .ruff_cache/
