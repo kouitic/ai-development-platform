@@ -48,6 +48,8 @@ mainマージと本番操作を行うAPIはMVPに含めていません。
 
 `AI_DEV_PROVIDER=claude`を選ぶと、`GITHUB_EVENT_PATH`の実payloadとActions contextからPrivate repository、非fork、同一head repository、許可branch、pull_request event、actor、統合Workflowを検証します。自己申告の`AI_DEV_MINIMAL_PERMISSIONS`等だけでは起動できません。統合Workflow YAMLにGitHub Environmentやproduction用途がないことも検査します。Claude SDKにはRead/Glob/Grep/Write/Editと必要なread-only Webだけを渡し、テスト、Git、PR、comment、Checkはホスト側サービスが担当します。
 
+ClaudeのStructured Outputsには小さな固定エンベロープだけを渡し、復号した結果をstage別の正式Schemaでホスト側が再検証します。外部APIのSchema制約に合わせて、ドメインの品質契約を緩和しません。詳細は[Agent Provider連携IF仕様](docs/provider-interface.md)を参照してください。
+
 この接続コードは実装済みですが、実Claude限定受入は未実施です。
 
 ## Mock GitHub Gatewayと実gh Gateway
@@ -144,6 +146,7 @@ uv run ai-dev verify-source-package --archive ai-development-platform-source.zip
 - [セキュリティモデル](docs/security-model.md)
 - [データガバナンス](docs/data-governance.md)
 - [開発ワークフロー](docs/development-workflow.md)
+- [Agent Provider連携IF仕様](docs/provider-interface.md)
 - [実Claude＋実GitHub限定受入ガイド](docs/limited-acceptance-guide.md)
 
 ## 外部受入済み機能

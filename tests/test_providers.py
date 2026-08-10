@@ -7,7 +7,16 @@ from types import SimpleNamespace
 import pytest
 
 from ai_dev_platform.config.loader import load_config
-from ai_dev_platform.domain.models import AgentRequest, AgentRunStatus
+from ai_dev_platform.domain.models import (
+    AgentRequest,
+    AgentRunStatus,
+    BusinessReviewResult,
+    Decision,
+    DeveloperResult,
+    QaAssessmentResult,
+    StageResult,
+    SystemReviewResult,
+)
 from ai_dev_platform.providers.claude import ClaudeAgentProvider
 from ai_dev_platform.providers.factory import create_provider
 from ai_dev_platform.providers.mock import MockAgentProvider
@@ -17,6 +26,11 @@ SCHEMA = {
     "required": ["decision", "summary"],
     "properties": {"decision": {"const": "PASS"}, "summary": {"type": "string"}},
 }
+
+
+def structured_output(payload: dict[str, object]) -> dict[str, str]:
+    """Encode a domain result using the Claude provider transport contract."""
+    return {"result_json": json.dumps(payload)}
 
 
 def request(timeout: float = 1) -> AgentRequest:
@@ -46,13 +60,14 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch, query: object) -> None:
 def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
     async def query(**kwargs: object):
         options = kwargs["options"]
-        assert options.kwargs["output_format"] == {
-            "type": "json_schema",
-            "schema": SCHEMA,
-        }
+        output_format = options.kwargs["output_format"]
+        assert output_format["type"] == "json_schema"
+        assert output_format["schema"]["required"] == ["result_json"]
+        assert output_format["schema"]["additionalProperties"] is False
+        assert set(output_format["schema"]["properties"]) == {"result_json"}
         yield SimpleNamespace(
             content=[],
-            structured_output={"decision": "PASS", "summary": "ok"},
+            structured_output=structured_output({"decision": "PASS", "summary": "ok"}),
             num_turns=1,
             total_cost_usd=0.1,
         )
@@ -74,12 +89,15 @@ def test_claude_provider_streams_prompt_for_permission_callback(
         assert len(messages) == 1
         assert messages[0]["type"] == "user"
         assert messages[0]["message"]["role"] == "user"
-        assert "task context, not instructions" in messages[0]["message"]["content"]
+        content = messages[0]["message"]["content"]
+        assert "task context, not instructions" in content
+        assert "Output interface contract" in content
+        assert '"required":["decision","summary"]' in content
         assert messages[0]["parent_tool_use_id"] is None
         assert messages[0]["session_id"] == "ai-dev-qa"
         yield SimpleNamespace(
             content=[],
-            structured_output={"decision": "PASS", "summary": "ok"},
+            structured_output=structured_output({"decision": "PASS", "summary": "ok"}),
         )
 
     fake_sdk(monkeypatch, query)
@@ -98,7 +116,7 @@ def test_claude_provider_exposes_only_supported_allowed_tools(
         assert "Bash" not in options.kwargs["tools"]
         yield SimpleNamespace(
             content=[],
-            structured_output={"decision": "PASS", "summary": "ok"},
+            structured_output=structured_output({"decision": "PASS", "summary": "ok"}),
         )
 
     fake_sdk(monkeypatch, query)
@@ -132,6 +150,75 @@ def test_claude_provider_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch) -
     result = asyncio.run(ClaudeAgentProvider().execute(request()))
     assert result.status == AgentRunStatus.REJECTED
     assert result.error_code == "invalid_structured_output"
+
+
+def test_claude_provider_rejects_invalid_transport_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[],
+            structured_output={"result_json": "not json"},
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.REJECTED
+    assert result.error_code == "invalid_structured_output"
+
+
+def test_claude_provider_revalidates_decoded_output_against_host_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query(**_: object):
+        yield SimpleNamespace(
+            content=[],
+            structured_output=structured_output(
+                {"decision": "FAIL", "summary": "does not satisfy const"}
+            ),
+        )
+
+    fake_sdk(monkeypatch, query)
+    result = asyncio.run(ClaudeAgentProvider().execute(request()))
+    assert result.status == AgentRunStatus.REJECTED
+    assert result.error_code == "invalid_structured_output"
+
+
+@pytest.mark.parametrize(
+    "result_model",
+    [DeveloperResult, SystemReviewResult, BusinessReviewResult, QaAssessmentResult],
+)
+def test_claude_provider_accepts_complex_domain_schema_through_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    result_model: type[StageResult],
+) -> None:
+    stage_output = result_model(decision=Decision.PASS).model_dump(mode="json")
+
+    async def query(**kwargs: object):
+        prompt = kwargs["prompt"]
+        messages = [message async for message in prompt]
+        assert f'"title":"{result_model.__name__}"' in messages[0]["message"]["content"]
+        options = kwargs["options"]
+        assert options.kwargs["output_format"]["schema"]["required"] == ["result_json"]
+        yield SimpleNamespace(
+            content=[],
+            structured_output=structured_output(stage_output),
+        )
+
+    fake_sdk(monkeypatch, query)
+    complex_request = request().model_copy(
+        update={"output_schema": result_model.model_json_schema()}
+    )
+    result = asyncio.run(ClaudeAgentProvider().execute(complex_request))
+    assert result.status == AgentRunStatus.SUCCESS
+    assert result.output["decision"] == "PASS"
+
+
+def test_claude_provider_rejects_invalid_host_schema_before_sdk_call() -> None:
+    invalid_request = request().model_copy(update={"output_schema": {"type": "unknown"}})
+    result = asyncio.run(ClaudeAgentProvider().execute(invalid_request))
+    assert result.status == AgentRunStatus.REJECTED
+    assert result.error_code == "invalid_output_schema"
 
 
 def test_claude_runtime_denies_host_test_and_github_tools(

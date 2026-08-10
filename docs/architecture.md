@@ -51,6 +51,8 @@ Workflow Orchestrator (LangGraph + deterministic transition guard)
 
 `AgentProvider.execute(AgentRequest) -> AgentResult`を共通契約とする。入力には役割、プロンプト、構造化コンテキスト、許可能力、出力Schema、タイムアウトを含める。結果は構造化payload、利用量、モデル、終了理由を持つ。
 
+`AgentRequest.output_schema`はホスト側の正式契約とし、外部Providerへ送る転送Schemaとは分離する。Claudeでは、固定された`result_json`文字列エンベロープだけをStructured Outputsへ渡し、復号後のobjectを正式Schemaで再検証する。これにより、外部APIの任意項目数や未対応Schema keywordの制約をドメインモデルへ波及させない。詳細は[Agent Provider連携IF仕様](provider-interface.md)を参照する。
+
 - `MockAgentProvider`: テストシナリオをキューから返し、外部接続なしで全遷移を再現する。
 - `ClaudeAgentProvider`: `claude` optional extraのClaude Agent SDKを遅延importし、設定されたツールとターン上限で実行する。Mock経路はSDKを依存に持たず、Claude選択時だけSDK未導入や資格情報不足をSecret非表示で報告する。
 - 将来Providerは登録表へ追加し、ドメインとワークフローを変更せず選択できる。
