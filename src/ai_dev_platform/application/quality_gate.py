@@ -61,6 +61,31 @@ def _developer_traceability_failure_message(result: AgentResult) -> str:
     )
 
 
+def _quality_gate_failure_message(
+    store: SQLiteStateStore,
+    task: TaskRecord,
+    stage: WorkflowState,
+) -> str:
+    """Return the latest safe transition reason without exposing provider details."""
+    failure_code = "quality_gate_failed"
+    for event in reversed(store.list_events(task.task_id)):
+        details = event.get("details")
+        if (
+            event.get("action") != "state_transition"
+            or not isinstance(details, dict)
+            or details.get("from") != stage.value
+        ):
+            continue
+        candidate = event.get("result")
+        if isinstance(candidate, str) and _SAFE_PROVIDER_ERROR_CODE.fullmatch(candidate):
+            failure_code = candidate
+        break
+    return (
+        f"{stage.value} did not pass its ordered quality gate: "
+        f"state={task.state.value}; code={failure_code}"
+    )
+
+
 def _bootstrap_evidence(
     issue: IssueData,
     verification: VerificationResult,
@@ -413,6 +438,13 @@ def run_integrated_quality_gates(
             stage=workflow_stage,
             verification=verification,
         )
+        expected_next = {
+            WorkflowState.SYSTEM_REVIEW: WorkflowState.BUSINESS_REVIEW,
+            WorkflowState.BUSINESS_REVIEW: WorkflowState.QA_ASSESSMENT,
+            WorkflowState.QA_ASSESSMENT: WorkflowState.HUMAN_APPROVAL_REQUIRED,
+        }[workflow_stage]
+        if task.state != expected_next:
+            raise ValueError(_quality_gate_failure_message(store, task, workflow_stage))
         artifact_path = write_quality_artifact(
             artifact_directory / filename,
             build_quality_artifact(task, review_type),
@@ -424,12 +456,5 @@ def run_integrated_quality_gates(
             pull_request_number=pull_request_number,
             commit_sha=verification.commit_sha or "",
         )
-        expected_next = {
-            WorkflowState.SYSTEM_REVIEW: WorkflowState.BUSINESS_REVIEW,
-            WorkflowState.BUSINESS_REVIEW: WorkflowState.QA_ASSESSMENT,
-            WorkflowState.QA_ASSESSMENT: WorkflowState.HUMAN_APPROVAL_REQUIRED,
-        }[workflow_stage]
-        if task.state != expected_next:
-            raise ValueError(f"{workflow_stage.value} did not pass its ordered quality gate")
     assert task is not None
     return task

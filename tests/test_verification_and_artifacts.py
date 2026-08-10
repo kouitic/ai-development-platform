@@ -16,6 +16,7 @@ from ai_dev_platform.application.quality_gate import (
     _assert_verification_target,
     _collect_host_validated_traceability,
     _developer_traceability_failure_message,
+    _quality_gate_failure_message,
     prepare_quality_task,
     run_integrated_quality_gates,
 )
@@ -86,6 +87,38 @@ def test_developer_traceability_failure_message_is_diagnostic_and_sanitized() ->
     message = _developer_traceability_failure_message(unsafe_error)
     assert "secret" not in message
     assert message.endswith("code=provider_failure")
+
+
+def test_quality_gate_failure_message_suppresses_unsafe_transition_reason(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStateStore(tmp_path / "failure-message.sqlite3")
+    task = store.create_task(
+        TaskRecord(
+            task_id="unsafe-transition-reason",
+            issue_number=1,
+            state=WorkflowState.FAILED,
+            commit_sha="a" * 40,
+        )
+    )
+    store.append_event(
+        task.task_id,
+        "orchestrator",
+        "state_transition",
+        "provider response contains internal detail",
+        {
+            "from": WorkflowState.SYSTEM_REVIEW,
+            "to": WorkflowState.FAILED,
+        },
+    )
+
+    message = _quality_gate_failure_message(store, task, WorkflowState.SYSTEM_REVIEW)
+
+    assert message == (
+        "SYSTEM_REVIEW did not pass its ordered quality gate: "
+        "state=FAILED; code=quality_gate_failed"
+    )
+    assert "internal detail" not in message
 
 
 def _run_git(root: Path, *args: str) -> None:
@@ -688,6 +721,102 @@ def test_workflow_never_commits_stale_or_failed_verification(
         VerificationStatus.FAIL,
         VerificationStatus.INVALIDATED,
     }
+
+
+@pytest.mark.parametrize(
+    ("review_result", "expected_state", "expected_code"),
+    [
+        (
+            AgentResult(
+                status=AgentRunStatus.ERROR,
+                error_code="provider_api_error_429",
+            ),
+            WorkflowState.FAILED,
+            "provider_api_error_429",
+        ),
+        (
+            AgentResult(status=AgentRunStatus.SUCCESS, output={}),
+            WorkflowState.REWORK_REQUIRED,
+            "invalid_agent_output_rejected",
+        ),
+    ],
+    ids=["provider-error", "invalid-review-output"],
+)
+def test_integrated_quality_gates_report_review_failure_before_artifact_creation(
+    initialized_project: Path,
+    review_result: AgentResult,
+    expected_state: WorkflowState,
+    expected_code: str,
+) -> None:
+    loaded = load_config(initialized_project)
+    store = SQLiteStateStore(initialized_project / ".ai-dev" / "local" / "failure.sqlite3")
+    gateway = MockGitHubGateway()
+    gateway.issues[41] = {
+        "title": "Issue",
+        "body": """```yaml
+requirements:
+  - id: BR-001
+    type: BUSINESS
+    description: Review the implementation
+    acceptance_criteria:
+      - Trusted verification passes
+    required: true
+```""",
+        "labels": [],
+    }
+    gateway.pull_requests[7] = PullRequestData(
+        number=7,
+        title="PR",
+        head_branch="ai/issue-41-review",
+        base_branch="main",
+        head_sha="a" * 40,
+    ).model_dump(mode="json")
+    gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
+    gateway.pull_request_diffs[7] = "reviewed diff"
+    (initialized_project / "src").mkdir(exist_ok=True)
+    (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    requirement_items = parse_structured_issue_requirements(
+        str(gateway.issues[41]["body"]), source_reference="mock://issues/41"
+    )
+    gateway.add_issue_comment(
+        41,
+        f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirement_items)}",
+    )
+    verification = _trusted_result("a" * 40, ["src/app.py"], "reviewed diff")
+    provider = MockAgentProvider(
+        scripted_results=[
+            _traceability_result(
+                reported_files=["src/app.py"],
+                implementation_reference="src/app.py",
+            ),
+            review_result,
+        ]
+    )
+    artifact_dir = initialized_project / ".ai-dev" / "local" / "failed-artifacts"
+
+    with pytest.raises(ValueError) as error:
+        run_integrated_quality_gates(
+            loaded,
+            provider,
+            store,
+            gateway,
+            initialized_project,
+            issue_number=41,
+            pull_request_number=7,
+            verification=verification,
+            artifact_directory=artifact_dir,
+        )
+
+    assert str(error.value) == (
+        "SYSTEM_REVIEW did not pass its ordered quality gate: "
+        f"state={expected_state.value}; code={expected_code}"
+    )
+    assert "requested review result is missing" not in str(error.value)
+    assert not (artifact_dir / "system-review.json").exists()
+    assert [request.agent_id for request in provider.requests] == [
+        "developer",
+        "system-reviewer",
+    ]
 
 
 def test_integrated_quality_gates_run_once_and_reject_artifact_sha_mismatch(
