@@ -18,6 +18,7 @@ def test_provider_preflight_report_is_digest_protected_and_sanitized(tmp_path: P
         overall_status="ERROR",
         stages=[
             ProviderPreflightStageResult(stage="models_api", status="PASS"),
+            ProviderPreflightStageResult(stage="token_count_api", status="PASS"),
             ProviderPreflightStageResult(
                 stage="messages_api",
                 status="ERROR",

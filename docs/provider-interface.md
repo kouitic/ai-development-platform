@@ -83,12 +83,13 @@ Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2
 | 段階 | 確認対象 |
 |---|---|
 | `models_api` | 固定のAnthropic originに対する`GET /v1/models?limit=1000`で、資格情報と診断モデルの利用可能性を確認する読み取り専用要求 |
+| `token_count_api` | 同じ診断モデルとuser messageを`POST /v1/messages/count_tokens`へ送り、生成前に入力形式を確認する要求 |
 | `messages_api` | 同じ診断モデルに`max_tokens=16`で送る、ツールを含まない最小の直接Messages API要求 |
 | `agent_sdk` | 同じ診断モデルにAgent SDKから送る、ツールなし、1 turnの最小要求 |
 
-`models_api`は有料生成を行わず30秒以下、`messages_api`は16 output token以下かつ30秒以下、`agent_sdk`は1 turn、90秒以下、最大0.05 USDとする。1回の診断で有料生成は最大2回である。直接APIはredirectを拒否し、API keyを固定のAnthropic origin以外へ転送しない。診断中は応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / ERROR`、安全な固定エラーコードだけを含み、隣接するSHA-256 digestで完全性を確認できるようにする。モデル一覧、Providerのエラー本文、応答本文、Prompt、Secret、費用明細は保存しない。
+`models_api`と`token_count_api`は有料生成を行わず30秒以下、`messages_api`は16 output token以下かつ30秒以下、`agent_sdk`は1 turn、90秒以下、最大0.05 USDとする。1回の診断で有料生成は最大2回である。直接APIはredirectを拒否し、API keyを固定のAnthropic origin以外へ転送しない。400応答は最大64KBの構造化JSONだけをメモリ内で一時解析し、課金残高、組織、Workspace、地域、資格情報、`max_tokens`、モデル、message、入力長に対応する固定コードへ分類して直ちに破棄する。診断中は応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / ERROR`、安全な固定エラーコードだけを含み、隣接するSHA-256 digestで完全性を確認できるようにする。モデル一覧、Providerのエラー本文、応答本文、request ID、Prompt、Secret、費用明細は保存しない。
 
-`models_api`失敗は資格情報、HTTP status、固定モデルの利用権限を調査する。`messages_api`まで成功して`agent_sdk`だけが失敗する場合は、Agent SDKまたは同梱Claude CLIの要求組み立て・認証経路を調査する。3段階すべてが成功して正式要求だけが失敗する場合は、Structured Outputs、runtime controls、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
+`models_api`失敗は資格情報、HTTP status、固定モデルの利用権限を調査する。`token_count_api`失敗はモデルとuser messageの入力形式を調査する。`token_count_api`成功後に`messages_api`が失敗した場合は、生成要求固有の`max_tokens`、課金、組織・Workspace制約を調査する。`messages_api`まで成功して`agent_sdk`だけが失敗する場合は、Agent SDKまたは同梱Claude CLIの要求組み立て・認証経路を調査する。4段階すべてが成功して正式要求だけが失敗する場合は、Structured Outputs、runtime controls、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
 
 ## 7. 変更時の契約試験
 
@@ -101,6 +102,7 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
 - 事前診断が同じ固定モデルで直接APIとAgent SDKを比較し、最初の失敗で停止する。
+- Token Counting APIとMessages APIが同じモデル・user messageを使用する。
 - 直接APIがredirectを拒否し、応答・エラー本文を安全な固定コードへ変換する。
 - 事前診断Artifactが`.ai-dev/local`外へ書き込めず、応答本文を含まない。
 

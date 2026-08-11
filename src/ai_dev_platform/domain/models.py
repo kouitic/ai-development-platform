@@ -152,7 +152,7 @@ class AgentRunStatus(StrEnum):
 class ProviderPreflightStageResult(StrictModel):
     """Sanitized result for one provider-boundary diagnostic request."""
 
-    stage: Literal["models_api", "messages_api", "agent_sdk"]
+    stage: Literal["models_api", "token_count_api", "messages_api", "agent_sdk"]
     status: Literal["PASS", "ERROR"]
     error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
 
@@ -173,7 +173,7 @@ class ProviderPreflightReport(StrictModel):
     provider: Literal["mock", "claude"]
     commit_sha: str = Field(min_length=7, max_length=64, pattern=r"^[0-9a-z]+$")
     overall_status: Literal["PASS", "ERROR", "SKIPPED"]
-    stages: list[ProviderPreflightStageResult] = Field(default_factory=list, max_length=3)
+    stages: list[ProviderPreflightStageResult] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def status_matches_stages(self) -> ProviderPreflightReport:
@@ -184,7 +184,7 @@ class ProviderPreflightReport(StrictModel):
             return self
         if self.provider != "claude" or not self.stages:
             raise ValueError("Claude preflight requires at least one stage")
-        expected_stages = ("models_api", "messages_api", "agent_sdk")
+        expected_stages = ("models_api", "token_count_api", "messages_api", "agent_sdk")
         observed_stages = tuple(stage.stage for stage in self.stages)
         if observed_stages != expected_stages[: len(observed_stages)]:
             raise ValueError("provider preflight stages are out of order")
@@ -196,8 +196,8 @@ class ProviderPreflightReport(StrictModel):
             raise ValueError("provider preflight status does not match its stages")
         if failed_indexes and failed_indexes != [len(self.stages) - 1]:
             raise ValueError("provider preflight must stop at its first failed stage")
-        if self.overall_status == "PASS" and len(self.stages) != 3:
-            raise ValueError("passed provider preflight requires all three stages")
+        if self.overall_status == "PASS" and len(self.stages) != 4:
+            raise ValueError("passed provider preflight requires all four stages")
         return self
 
 

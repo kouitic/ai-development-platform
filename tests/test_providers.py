@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import sys
 import urllib.error
@@ -19,7 +20,10 @@ from ai_dev_platform.domain.models import (
     StageResult,
     SystemReviewResult,
 )
-from ai_dev_platform.providers.claude import ClaudeAgentProvider
+from ai_dev_platform.providers.claude import (
+    ClaudeAgentProvider,
+    _safe_direct_api_error_detail,
+)
 from ai_dev_platform.providers.factory import create_provider
 from ai_dev_platform.providers.mock import MockAgentProvider
 
@@ -103,6 +107,39 @@ def fake_direct_api(
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-test-api-key")
     return opener
+
+
+@pytest.mark.parametrize(
+    ("provider_message", "expected_code"),
+    [
+        (
+            "Your credit balance is too low. private-provider-detail",
+            "billing_credit_balance_low",
+        ),
+        ("The selected model is not available for this workspace.", "workspace_restriction"),
+        ("max_tokens must be greater than the supported minimum.", "max_tokens_invalid"),
+        ("unclassified private-provider-detail", "invalid_request"),
+    ],
+)
+def test_direct_api_400_detail_is_allowlisted_without_retaining_message(
+    provider_message: str,
+    expected_code: str,
+) -> None:
+    response = json.dumps(
+        {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": provider_message},
+        }
+    ).encode("utf-8")
+
+    code = _safe_direct_api_error_detail(response)
+
+    assert code == expected_code
+    assert provider_message not in code
+
+
+def test_direct_api_400_detail_rejects_unstructured_content() -> None:
+    assert _safe_direct_api_error_detail(b"private non-json provider detail") == ("invalid_request")
 
 
 def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -403,6 +440,7 @@ def test_claude_provider_preflight_compares_direct_api_and_agent_sdk(
         monkeypatch,
         [
             {"data": [{"id": "claude-sonnet-4-6"}]},
+            {"input_tokens": 8},
             {"type": "message", "model": "claude-sonnet-4-6", "content": []},
         ],
     )
@@ -410,18 +448,23 @@ def test_claude_provider_preflight_compares_direct_api_and_agent_sdk(
 
     assert [result.stage for result in results] == [
         "models_api",
+        "token_count_api",
         "messages_api",
         "agent_sdk",
     ]
     assert all(result.status == "PASS" for result in results)
-    assert [request.get_method() for request in opener.requests] == ["GET", "POST"]
+    assert [request.get_method() for request in opener.requests] == ["GET", "POST", "POST"]
     assert opener.requests[0].full_url.endswith("/v1/models?limit=1000")
-    assert opener.requests[1].full_url.endswith("/v1/messages")
+    assert opener.requests[1].full_url.endswith("/v1/messages/count_tokens")
+    assert opener.requests[2].full_url.endswith("/v1/messages")
     headers = {key.casefold(): value for key, value in opener.requests[0].header_items()}
     assert headers["anthropic-version"] == "2023-06-01"
     assert headers["x-api-key"] == "configured-test-api-key"
-    direct_payload = json.loads(opener.requests[1].data or b"{}")
-    assert direct_payload["model"] == "claude-sonnet-4-6"
+    token_count_payload = json.loads(opener.requests[1].data or b"{}")
+    direct_payload = json.loads(opener.requests[2].data or b"{}")
+    assert token_count_payload["model"] == direct_payload["model"] == "claude-sonnet-4-6"
+    assert token_count_payload["messages"] == direct_payload["messages"]
+    assert "max_tokens" not in token_count_payload
     assert direct_payload["max_tokens"] == 16
     assert len(observed_options) == 1
     assert observed_options[0]["model"] == "claude-sonnet-4-6"
@@ -448,22 +491,36 @@ def test_claude_provider_preflight_stops_at_direct_messages_error(
         monkeypatch,
         [
             {"data": [{"id": "claude-sonnet-4-6"}]},
+            {"input_tokens": 8},
             urllib.error.HTTPError(
                 "https://api.anthropic.com/v1/messages",
                 400,
-                sensitive_detail,
+                "Bad Request",
                 None,
-                None,
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": (
+                                    "Your credit balance is too low to access the API. "
+                                    f"{sensitive_detail}"
+                                ),
+                            },
+                        }
+                    ).encode("utf-8")
+                ),
             ),
         ],
     )
     results = asyncio.run(ClaudeAgentProvider().preflight())
 
     assert calls == 0
-    assert len(opener.requests) == 2
-    assert [result.status for result in results] == ["PASS", "ERROR"]
+    assert len(opener.requests) == 3
+    assert [result.status for result in results] == ["PASS", "PASS", "ERROR"]
     assert results[-1].stage == "messages_api"
-    assert results[-1].error_code == "provider_api_error_400_invalid_request"
+    assert results[-1].error_code == "provider_api_error_400_billing_credit_balance_low"
     assert sensitive_detail not in json.dumps(
         [result.model_dump(mode="json") for result in results]
     )

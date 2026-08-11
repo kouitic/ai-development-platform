@@ -121,7 +121,7 @@ uv run ai-dev approve --issue 1 --stage human-approval --commit-sha <対象コ�
 
 この承認はGitHub正式記録の成功後にローカル監査へ記録しますが、mainのマージや本番操作は行いません。
 
-正式なrequired Check経路は`.github/workflows/ai-quality-gates.yml`です。Secret履歴検査後に3段階のProvider事前診断を行い、CI検証、System Review、Business Review、QAを同一Job・同一PR head SHAで順番に一度ずつ実行します。診断と各結果のJSONおよびSHA-256 digestは、安全な一時領域へ保存します。
+正式なrequired Check経路は`.github/workflows/ai-quality-gates.yml`です。Secret履歴検査後に4段階のProvider事前診断を行い、CI検証、System Review、Business Review、QAを同一Job・同一PR head SHAで順番に一度ずつ実行します。診断と各結果のJSONおよびSHA-256 digestは、安全な一時領域へ保存します。
 
 ```powershell
 uv run ai-dev quality-gates --issue 1 --pr 2 --base-sha <PR base SHA> --head-sha <PR head SHA>

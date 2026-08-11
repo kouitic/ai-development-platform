@@ -10,6 +10,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Literal
 
@@ -47,7 +48,8 @@ _PREFLIGHT_MAX_BUDGET_USD = 0.05
 _PREFLIGHT_TIMEOUT_SECONDS = 90.0
 _PREFLIGHT_DIRECT_TIMEOUT_SECONDS = 30.0
 _PREFLIGHT_MAX_RESPONSE_BYTES = 2_000_000
-ClaudePreflightStage = Literal["models_api", "messages_api", "agent_sdk"]
+_PREFLIGHT_MAX_ERROR_BYTES = 64_000
+ClaudePreflightStage = Literal["models_api", "token_count_api", "messages_api", "agent_sdk"]
 
 _SAFE_RESULT_SUBTYPE_CODES = {
     "error_during_execution": "provider_execution_error",
@@ -80,10 +82,80 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _safe_http_error_code(status: int) -> str:
-    """Map an HTTP status to a content-free diagnostic code."""
+def _safe_direct_api_error_detail(raw_response: bytes) -> str:
+    """Classify a structured 400 response without retaining its provider message."""
+    if len(raw_response) > _PREFLIGHT_MAX_ERROR_BYTES:
+        return "invalid_request"
+    try:
+        decoded = json.loads(raw_response.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "invalid_request"
+    if not isinstance(decoded, dict):
+        return "invalid_request"
+    error = decoded.get("error")
+    if not isinstance(error, dict) or error.get("type") != "invalid_request_error":
+        return "invalid_request"
+    message = error.get("message")
+    if not isinstance(message, str):
+        return "invalid_request"
+    normalized = message.casefold()[:4096]
+
+    if "credit balance" in normalized and any(
+        term in normalized for term in ("too low", "insufficient", "purchase credit")
+    ):
+        return "billing_credit_balance_low"
+    if any(term in normalized for term in ("billing", "payment", "purchase credit")):
+        return "billing_unavailable"
+    if "organization" in normalized and any(
+        term in normalized for term in ("disabled", "deactivated", "suspended")
+    ):
+        return "organization_disabled"
+    if "workspace" in normalized:
+        return "workspace_restriction"
+    if "region" in normalized:
+        return "region_restriction"
+    if any(term in normalized for term in ("api key", "api_key")):
+        return "credentials_invalid"
+    if any(term in normalized for term in ("max_tokens", "max tokens")):
+        return "max_tokens_invalid"
+    if "model" in normalized:
+        if any(
+            term in normalized
+            for term in (
+                "not available",
+                "unavailable",
+                "not found",
+                "does not exist",
+                "do not have access",
+                "don't have access",
+            )
+        ):
+            return "model_unavailable"
+        return "model_invalid"
+    if any(
+        term in normalized for term in ("messages", "message.", "content", "user message", "role")
+    ):
+        return "messages_invalid"
+    if "prompt is too long" in normalized or "input tokens" in normalized:
+        return "input_too_large"
+    return "invalid_request"
+
+
+def _safe_http_error_code(error: urllib.error.HTTPError) -> str:
+    """Map an HTTP failure to a safe code and discard its response body."""
+    status = error.code
     code = f"provider_api_error_{status}"
-    return f"{code}_invalid_request" if status == 400 else code
+    raw_response = b""
+    if status == 400:
+        try:
+            raw_response = error.read(_PREFLIGHT_MAX_ERROR_BYTES + 1)
+        except Exception:  # Provider stream details are intentionally discarded.
+            raw_response = b""
+    with suppress(Exception):
+        error.close()
+    if status != 400:
+        return code
+    return f"{code}_{_safe_direct_api_error_detail(raw_response)}"
 
 
 def _request_anthropic_json(
@@ -114,7 +186,7 @@ def _request_anthropic_json(
         with opener.open(request, timeout=timeout_seconds) as response:
             raw_response = response.read(_PREFLIGHT_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise _ProviderPreflightError(_safe_http_error_code(exc.code)) from None
+        raise _ProviderPreflightError(_safe_http_error_code(exc)) from None
     except (urllib.error.URLError, OSError, TimeoutError):
         raise _ProviderPreflightError("provider_connection_error") from None
 
@@ -144,6 +216,25 @@ def _probe_models_api(api_key: str, timeout_seconds: float) -> None:
         raise _ProviderPreflightError("provider_model_unavailable")
 
 
+def _preflight_messages() -> list[dict[str, str]]:
+    """Return the shared minimal user message for direct boundary probes."""
+    return [{"role": "user", "content": "Reply only with OK."}]
+
+
+def _probe_token_count_api(api_key: str, timeout_seconds: float) -> None:
+    """Validate the pinned model and message shape without generating a response."""
+    response = _request_anthropic_json(
+        path="/v1/messages/count_tokens",
+        api_key=api_key,
+        method="POST",
+        timeout_seconds=timeout_seconds,
+        payload={"model": _PREFLIGHT_MODEL, "messages": _preflight_messages()},
+    )
+    input_tokens = response.get("input_tokens")
+    if not isinstance(input_tokens, int) or isinstance(input_tokens, bool) or input_tokens < 0:
+        raise _ProviderPreflightError("provider_invalid_response")
+
+
 def _probe_messages_api(api_key: str, timeout_seconds: float) -> None:
     """Send one minimal paid request through the direct Messages API."""
     response = _request_anthropic_json(
@@ -154,7 +245,7 @@ def _probe_messages_api(api_key: str, timeout_seconds: float) -> None:
         payload={
             "model": _PREFLIGHT_MODEL,
             "max_tokens": 16,
-            "messages": [{"role": "user", "content": "Reply only with OK."}],
+            "messages": _preflight_messages(),
         },
     )
     if response.get("type") != "message":
@@ -326,7 +417,7 @@ class ClaudeAgentProvider:
         timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS,
         max_budget_usd: float = _PREFLIGHT_MAX_BUDGET_USD,
     ) -> list[ProviderPreflightStageResult]:
-        """Compare fixed-model Models API, Messages API, and Agent SDK behavior."""
+        """Compare fixed-model Models, token count, Messages, and Agent SDK behavior."""
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             return [
@@ -341,6 +432,7 @@ class ClaudeAgentProvider:
         direct_timeout = min(bounded_timeout, _PREFLIGHT_DIRECT_TIMEOUT_SECONDS)
         direct_probes: list[tuple[ClaudePreflightStage, Callable[[str, float], None]]] = [
             ("models_api", _probe_models_api),
+            ("token_count_api", _probe_token_count_api),
             ("messages_api", _probe_messages_api),
         ]
         results: list[ProviderPreflightStageResult] = []
