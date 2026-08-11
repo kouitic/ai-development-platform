@@ -996,11 +996,8 @@ def provider_preflight_command(
                 overall_status="SKIPPED",
             )
         elif isinstance(provider, ClaudeAgentProvider):
-            developer = loaded.agents.get("developer")
             stages = asyncio.run(
                 provider.preflight(
-                    root=root,
-                    model=developer.model if developer is not None else "default",
                     timeout_seconds=loaded.project.workflow.timeout_minutes * 60,
                     max_budget_usd=loaded.project.budget.per_task.stop_usd,
                 )

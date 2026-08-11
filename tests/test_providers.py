@@ -1,6 +1,8 @@
 import asyncio
 import json
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -55,6 +57,52 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch, query: object) -> None:
         "claude_agent_sdk",
         SimpleNamespace(ClaudeAgentOptions=Options, query=query),
     )
+
+
+class FakeHTTPResponse:
+    """Small context-managed JSON response for direct API probe tests."""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self.body if size < 0 else self.body[:size]
+
+
+class FakeHTTPOpener:
+    """Return queued API results while retaining only test requests."""
+
+    def __init__(self, responses: list[dict[str, object] | Exception]) -> None:
+        self.responses = list(responses)
+        self.requests: list[urllib.request.Request] = []
+
+    def open(self, request: urllib.request.Request, *, timeout: float) -> FakeHTTPResponse:
+        assert timeout <= 30
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return FakeHTTPResponse(response)
+
+
+def fake_direct_api(
+    monkeypatch: pytest.MonkeyPatch,
+    responses: list[dict[str, object] | Exception],
+) -> FakeHTTPOpener:
+    """Install one no-network opener for all direct API stages."""
+    opener = FakeHTTPOpener(responses)
+    monkeypatch.setattr(
+        "ai_dev_platform.providers.claude.urllib.request.build_opener",
+        lambda *_: opener,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-test-api-key")
+    return opener
 
 
 def test_claude_provider_accepts_schema_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,51 +387,53 @@ def test_claude_provider_classifies_structured_output_retry_exhaustion(
     assert "validation detail" not in result.summary
 
 
-def test_claude_provider_preflight_progressively_adds_interface_features(
+def test_claude_provider_preflight_compares_direct_api_and_agent_sdk(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     observed_options: list[dict[str, object]] = []
 
     async def query(**kwargs: object):
         options = kwargs["options"]
         observed_options.append(options.kwargs)
-        prompt = kwargs["prompt"]
-        if len(observed_options) < 3:
-            assert isinstance(prompt, str)
-        else:
-            assert not isinstance(prompt, str)
-            messages = [message async for message in prompt]
-            assert messages[0]["session_id"] == "ai-dev-provider-preflight"
-        yield SimpleNamespace(
-            is_error=False,
-            structured_output=(
-                None if len(observed_options) == 1 else {"result_json": '{"ok":true}'}
-            ),
-        )
+        assert kwargs["prompt"] == "Reply only with OK. Do not use tools."
+        yield SimpleNamespace(is_error=False)
 
     fake_sdk(monkeypatch, query)
-    results = asyncio.run(ClaudeAgentProvider().preflight(root=tmp_path))
+    opener = fake_direct_api(
+        monkeypatch,
+        [
+            {"data": [{"id": "claude-sonnet-4-6"}]},
+            {"type": "message", "model": "claude-sonnet-4-6", "content": []},
+        ],
+    )
+    results = asyncio.run(ClaudeAgentProvider().preflight())
 
     assert [result.stage for result in results] == [
-        "basic",
-        "structured_output",
-        "runtime_controls",
+        "models_api",
+        "messages_api",
+        "agent_sdk",
     ]
     assert all(result.status == "PASS" for result in results)
+    assert [request.get_method() for request in opener.requests] == ["GET", "POST"]
+    assert opener.requests[0].full_url.endswith("/v1/models?limit=1000")
+    assert opener.requests[1].full_url.endswith("/v1/messages")
+    headers = {key.casefold(): value for key, value in opener.requests[0].header_items()}
+    assert headers["anthropic-version"] == "2023-06-01"
+    assert headers["x-api-key"] == "configured-test-api-key"
+    direct_payload = json.loads(opener.requests[1].data or b"{}")
+    assert direct_payload["model"] == "claude-sonnet-4-6"
+    assert direct_payload["max_tokens"] == 16
+    assert len(observed_options) == 1
+    assert observed_options[0]["model"] == "claude-sonnet-4-6"
     assert observed_options[0]["tools"] == []
+    assert observed_options[0]["max_turns"] == 1
+    assert observed_options[0]["max_budget_usd"] == 0.05
+    assert observed_options[0]["setting_sources"] == []
     assert "output_format" not in observed_options[0]
-    assert observed_options[1]["output_format"] == observed_options[2]["output_format"]
-    assert observed_options[2]["tools"] == ["Read", "Glob", "Grep"]
-    assert observed_options[2]["allowed_tools"] == []
-    assert observed_options[2]["sandbox"]["enabled"] is True
-    assert all(options["max_turns"] == 1 for options in observed_options)
-    assert all(options["max_budget_usd"] == 0.05 for options in observed_options)
 
 
-def test_claude_provider_preflight_stops_and_suppresses_error_text(
+def test_claude_provider_preflight_stops_at_direct_messages_error(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     calls = 0
     sensitive_detail = "sensitive-provider-message-must-not-persist"
@@ -391,26 +441,60 @@ def test_claude_provider_preflight_stops_and_suppresses_error_text(
     async def query(**_: object):
         nonlocal calls
         calls += 1
-        if calls == 1:
-            yield SimpleNamespace(is_error=False)
-        else:
-            yield SimpleNamespace(
-                is_error=True,
-                subtype="success",
-                api_error_status=400,
-                errors=[sensitive_detail],
-            )
+        yield SimpleNamespace(is_error=False)
 
     fake_sdk(monkeypatch, query)
-    results = asyncio.run(ClaudeAgentProvider().preflight(root=tmp_path))
+    opener = fake_direct_api(
+        monkeypatch,
+        [
+            {"data": [{"id": "claude-sonnet-4-6"}]},
+            urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages",
+                400,
+                sensitive_detail,
+                None,
+                None,
+            ),
+        ],
+    )
+    results = asyncio.run(ClaudeAgentProvider().preflight())
 
-    assert calls == 2
+    assert calls == 0
+    assert len(opener.requests) == 2
     assert [result.status for result in results] == ["PASS", "ERROR"]
-    assert results[-1].stage == "structured_output"
+    assert results[-1].stage == "messages_api"
     assert results[-1].error_code == "provider_api_error_400_invalid_request"
     assert sensitive_detail not in json.dumps(
         [result.model_dump(mode="json") for result in results]
     )
+
+
+def test_claude_provider_preflight_stops_when_pinned_model_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def query(**_: object):
+        nonlocal calls
+        calls += 1
+        yield SimpleNamespace(is_error=False)
+
+    fake_sdk(monkeypatch, query)
+    opener = fake_direct_api(
+        monkeypatch,
+        [{"data": [{"id": "claude-haiku-4-5"}]}],
+    )
+    results = asyncio.run(ClaudeAgentProvider().preflight())
+
+    assert calls == 0
+    assert len(opener.requests) == 1
+    assert [result.model_dump(mode="json") for result in results] == [
+        {
+            "stage": "models_api",
+            "status": "ERROR",
+            "error_code": "provider_model_unavailable",
+        }
+    ]
 
 
 def test_claude_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

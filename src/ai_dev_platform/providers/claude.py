@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 import re
-from collections.abc import AsyncIterator
+import urllib.error
+import urllib.request
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,9 +40,14 @@ _SDK_TOOL_BY_PLATFORM_TOOL = {
 }
 
 _CLAUDE_RESULT_JSON_FIELD = "result_json"
+_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
+_ANTHROPIC_API_VERSION = "2023-06-01"
+_PREFLIGHT_MODEL = "claude-sonnet-4-6"
 _PREFLIGHT_MAX_BUDGET_USD = 0.05
 _PREFLIGHT_TIMEOUT_SECONDS = 90.0
-ClaudePreflightStage = Literal["basic", "structured_output", "runtime_controls"]
+_PREFLIGHT_DIRECT_TIMEOUT_SECONDS = 30.0
+_PREFLIGHT_MAX_RESPONSE_BYTES = 2_000_000
+ClaudePreflightStage = Literal["models_api", "messages_api", "agent_sdk"]
 
 _SAFE_RESULT_SUBTYPE_CODES = {
     "error_during_execution": "provider_execution_error",
@@ -47,6 +55,110 @@ _SAFE_RESULT_SUBTYPE_CODES = {
     "error_max_structured_output_retries": "provider_structured_output_retries_exhausted",
     "error_max_turns": "provider_max_turns",
 }
+
+
+class _ProviderPreflightError(Exception):
+    """Carry only an allowlisted diagnostic code across the direct API boundary."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent an API key from being forwarded away from the fixed Anthropic origin."""
+
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _safe_http_error_code(status: int) -> str:
+    """Map an HTTP status to a content-free diagnostic code."""
+    code = f"provider_api_error_{status}"
+    return f"{code}_invalid_request" if status == 400 else code
+
+
+def _request_anthropic_json(
+    *,
+    path: str,
+    api_key: str,
+    method: Literal["GET", "POST"],
+    timeout_seconds: float,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call one fixed-origin Anthropic endpoint without retaining response content."""
+    body = None
+    headers = {
+        "anthropic-version": _ANTHROPIC_API_VERSION,
+        "x-api-key": api_key,
+    }
+    if payload is not None:
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        headers["content-type"] = "application/json"
+    request = urllib.request.Request(
+        f"{_ANTHROPIC_API_BASE_URL}{path}",
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request, timeout=timeout_seconds) as response:
+            raw_response = response.read(_PREFLIGHT_MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        raise _ProviderPreflightError(_safe_http_error_code(exc.code)) from None
+    except (urllib.error.URLError, OSError, TimeoutError):
+        raise _ProviderPreflightError("provider_connection_error") from None
+
+    if len(raw_response) > _PREFLIGHT_MAX_RESPONSE_BYTES:
+        raise _ProviderPreflightError("provider_response_too_large")
+    try:
+        decoded = json.loads(raw_response.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _ProviderPreflightError("provider_invalid_response") from None
+    if not isinstance(decoded, dict):
+        raise _ProviderPreflightError("provider_invalid_response")
+    return decoded
+
+
+def _probe_models_api(api_key: str, timeout_seconds: float) -> None:
+    """Verify that the API key can enumerate the pinned diagnostic model."""
+    response = _request_anthropic_json(
+        path="/v1/models?limit=1000",
+        api_key=api_key,
+        method="GET",
+        timeout_seconds=timeout_seconds,
+    )
+    models = response.get("data")
+    if not isinstance(models, list):
+        raise _ProviderPreflightError("provider_invalid_response")
+    if not any(isinstance(model, dict) and model.get("id") == _PREFLIGHT_MODEL for model in models):
+        raise _ProviderPreflightError("provider_model_unavailable")
+
+
+def _probe_messages_api(api_key: str, timeout_seconds: float) -> None:
+    """Send one minimal paid request through the direct Messages API."""
+    response = _request_anthropic_json(
+        path="/v1/messages",
+        api_key=api_key,
+        method="POST",
+        timeout_seconds=timeout_seconds,
+        payload={
+            "model": _PREFLIGHT_MODEL,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Reply only with OK."}],
+        },
+    )
+    if response.get("type") != "message":
+        raise _ProviderPreflightError("provider_invalid_response")
 
 
 def _safe_api_error_detail(errors: Any) -> str:
@@ -181,11 +293,9 @@ class ClaudeAgentProvider:
         options: Any,
         prompt: str | AsyncIterator[dict[str, Any]],
         timeout_seconds: float,
-        require_structured_output: bool,
     ) -> ProviderPreflightStageResult:
         """Run one bounded probe and retain only a safe status code."""
         result_seen = False
-        structured_output_seen = False
         provider_error_code: str | None = None
         try:
             async with asyncio.timeout(timeout_seconds):
@@ -193,8 +303,6 @@ class ClaudeAgentProvider:
                     is_error = getattr(message, "is_error", None)
                     if isinstance(is_error, bool):
                         result_seen = True
-                        if getattr(message, "structured_output", None) is not None:
-                            structured_output_seen = True
                         if is_error:
                             provider_error_code = _safe_provider_error_code(message)
         except TimeoutError:
@@ -204,8 +312,6 @@ class ClaudeAgentProvider:
 
         if provider_error_code is None and not result_seen:
             provider_error_code = "provider_preflight_incomplete"
-        if provider_error_code is None and require_structured_output and not structured_output_seen:
-            provider_error_code = "provider_structured_output_missing"
         if provider_error_code is not None:
             return ProviderPreflightStageResult(
                 stage=stage,
@@ -217,119 +323,76 @@ class ClaudeAgentProvider:
     async def preflight(
         self,
         *,
-        root: Path,
-        model: str = "default",
         timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS,
         max_budget_usd: float = _PREFLIGHT_MAX_BUDGET_USD,
     ) -> list[ProviderPreflightStageResult]:
-        """Progressively isolate basic, structured-output, and runtime-control failures."""
+        """Compare fixed-model Models API, Messages API, and Agent SDK behavior."""
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return [
+                ProviderPreflightStageResult(
+                    stage="models_api",
+                    status="ERROR",
+                    error_code="provider_credentials_missing",
+                )
+            ]
+
+        bounded_timeout = min(timeout_seconds, _PREFLIGHT_TIMEOUT_SECONDS)
+        direct_timeout = min(bounded_timeout, _PREFLIGHT_DIRECT_TIMEOUT_SECONDS)
+        direct_probes: list[tuple[ClaudePreflightStage, Callable[[str, float], None]]] = [
+            ("models_api", _probe_models_api),
+            ("messages_api", _probe_messages_api),
+        ]
+        results: list[ProviderPreflightStageResult] = []
+        for stage, probe in direct_probes:
+            try:
+                await asyncio.to_thread(probe, api_key, direct_timeout)
+            except _ProviderPreflightError as exc:
+                result = ProviderPreflightStageResult(
+                    stage=stage,
+                    status="ERROR",
+                    error_code=exc.code,
+                )
+            except Exception:  # Direct API exception text is intentionally discarded.
+                result = ProviderPreflightStageResult(
+                    stage=stage,
+                    status="ERROR",
+                    error_code="provider_execution_exception",
+                )
+            else:
+                result = ProviderPreflightStageResult(stage=stage, status="PASS")
+            results.append(result)
+            if result.status == "ERROR":
+                return results
+
         try:
             sdk = importlib.import_module("claude_agent_sdk")
             claude_agent_options = sdk.ClaudeAgentOptions
             query = sdk.query
         except (ImportError, AttributeError):
-            return [
+            results.append(
                 ProviderPreflightStageResult(
-                    stage="basic", status="ERROR", error_code="sdk_not_installed"
+                    stage="agent_sdk", status="ERROR", error_code="sdk_not_installed"
                 )
-            ]
-
-        try:
-            sdk_types = importlib.import_module("claude_agent_sdk.types")
-            permission_deny = sdk_types.PermissionResultDeny
-        except (ImportError, AttributeError):
-
-            def permission_deny(**kwargs: Any) -> dict[str, Any]:
-                return {"behavior": "deny", **kwargs}
-
-        async def deny_tool(_name: str, _input: dict[str, Any], _context: Any) -> Any:
-            return permission_deny(
-                message="Tools are disabled during provider preflight.", interrupt=False
             )
+            return results
 
-        bounded_timeout = min(timeout_seconds, _PREFLIGHT_TIMEOUT_SECONDS)
         bounded_budget = min(max_budget_usd, _PREFLIGHT_MAX_BUDGET_USD)
-        selected_model = None if model == "default" else model
-        common_options: dict[str, Any] = {
-            "tools": [],
-            "max_turns": 1,
-            "max_budget_usd": bounded_budget,
-            "setting_sources": [],
-        }
-        if selected_model:
-            common_options["model"] = selected_model
-
-        transport_format = {
-            "type": "json_schema",
-            "schema": _claude_output_transport_schema(),
-        }
-        probes: list[tuple[ClaudePreflightStage, dict[str, Any], bool]] = [
-            ("basic", dict(common_options), False),
-            (
-                "structured_output",
-                {**common_options, "output_format": transport_format},
-                False,
-            ),
-            (
-                "runtime_controls",
-                {
-                    **common_options,
-                    "system_prompt": (
-                        "This is a connection preflight. Do not use tools or inspect files."
-                    ),
-                    "tools": ["Read", "Glob", "Grep"],
-                    "allowed_tools": [],
-                    "disallowed_tools": [
-                        "Write",
-                        "Edit",
-                        "Bash",
-                        "Shell",
-                        "WebFetch",
-                        "WebSearch",
-                    ],
-                    "permission_mode": "default",
-                    "can_use_tool": deny_tool,
-                    "cwd": root.resolve(),
-                    "sandbox": {
-                        "enabled": True,
-                        "autoAllowBashIfSandboxed": False,
-                        "allowUnsandboxedCommands": False,
-                        "network": {
-                            "allowedDomains": [],
-                            "allowManagedDomainsOnly": True,
-                            "allowUnixSockets": [],
-                            "allowAllUnixSockets": False,
-                            "allowLocalBinding": False,
-                        },
-                    },
-                    "output_format": transport_format,
-                },
-                True,
-            ),
-        ]
-
-        results: list[ProviderPreflightStageResult] = []
-        for stage, option_values, use_stream in probes:
-            prompt_text = (
-                "Return a result_json string containing the serialized JSON object "
-                '{"ok":true}. Do not use tools.'
-                if stage != "basic"
-                else "Reply with OK. Do not use tools."
-            )
-            prompt: str | AsyncIterator[dict[str, Any]] = prompt_text
-            if use_stream:
-                prompt = self._prompt_stream(prompt_text, "provider-preflight")
-            result = await self._run_preflight_stage(
-                stage=stage,
-                query=query,
-                options=claude_agent_options(**option_values),
-                prompt=prompt,
-                timeout_seconds=bounded_timeout,
-                require_structured_output=stage != "basic",
-            )
-            results.append(result)
-            if result.status == "ERROR":
-                break
+        options = claude_agent_options(
+            model=_PREFLIGHT_MODEL,
+            tools=[],
+            max_turns=1,
+            max_budget_usd=bounded_budget,
+            setting_sources=[],
+        )
+        result = await self._run_preflight_stage(
+            stage="agent_sdk",
+            query=query,
+            options=options,
+            prompt="Reply only with OK. Do not use tools.",
+            timeout_seconds=bounded_timeout,
+        )
+        results.append(result)
         return results
 
     async def execute(self, request: AgentRequest) -> AgentResult:

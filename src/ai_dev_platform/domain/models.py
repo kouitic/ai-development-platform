@@ -150,9 +150,9 @@ class AgentRunStatus(StrEnum):
 
 
 class ProviderPreflightStageResult(StrictModel):
-    """Sanitized result for one progressively richer provider request."""
+    """Sanitized result for one provider-boundary diagnostic request."""
 
-    stage: Literal["basic", "structured_output", "runtime_controls"]
+    stage: Literal["models_api", "messages_api", "agent_sdk"]
     status: Literal["PASS", "ERROR"]
     error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
 
@@ -184,7 +184,7 @@ class ProviderPreflightReport(StrictModel):
             return self
         if self.provider != "claude" or not self.stages:
             raise ValueError("Claude preflight requires at least one stage")
-        expected_stages = ("basic", "structured_output", "runtime_controls")
+        expected_stages = ("models_api", "messages_api", "agent_sdk")
         observed_stages = tuple(stage.stage for stage in self.stages)
         if observed_stages != expected_stages[: len(observed_stages)]:
             raise ValueError("provider preflight stages are out of order")

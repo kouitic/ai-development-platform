@@ -17,9 +17,9 @@ def test_provider_preflight_report_is_digest_protected_and_sanitized(tmp_path: P
         commit_sha="a" * 40,
         overall_status="ERROR",
         stages=[
-            ProviderPreflightStageResult(stage="basic", status="PASS"),
+            ProviderPreflightStageResult(stage="models_api", status="PASS"),
             ProviderPreflightStageResult(
-                stage="structured_output",
+                stage="messages_api",
                 status="ERROR",
                 error_code="provider_api_error_400_invalid_request",
             ),
@@ -35,7 +35,7 @@ def test_provider_preflight_report_is_digest_protected_and_sanitized(tmp_path: P
     payload = destination.read_bytes()
     persisted = json.loads(payload)
     assert persisted["overall_status"] == "ERROR"
-    assert persisted["stages"][-1]["stage"] == "structured_output"
+    assert persisted["stages"][-1]["stage"] == "messages_api"
     assert set(persisted["stages"][-1]) == {"stage", "status", "error_code"}
     assert destination.with_suffix(".json.sha256").read_text(encoding="ascii").strip() == (
         artifact_digest(payload)

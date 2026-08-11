@@ -78,17 +78,17 @@ Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2
 
 ## 6. Provider事前診断
 
-統合品質WorkflowはSecret履歴検査の後、正式な品質ゲートより前に`provider-preflight`を実行する。API資格情報がない場合はMockとして`SKIPPED`とし、外部APIを呼び出さない。Claudeの場合は失敗した時点で停止し、最大3回まで次を順番に確認する。
+統合品質WorkflowはSecret履歴検査の後、正式な品質ゲートより前に`provider-preflight`を実行する。API資格情報がない場合はMockとして`SKIPPED`とし、外部APIを呼び出さない。Claudeの場合は診断モデルを`claude-sonnet-4-6`へ固定し、失敗した時点で停止して次を順番に確認する。
 
 | 段階 | 確認対象 |
 |---|---|
-| `basic` | ツールとStructured Outputsを使わない最小要求 |
-| `structured_output` | 固定の小さな転送Schemaを追加した要求 |
-| `runtime_controls` | Structured OutputsにRead系ツール定義、permission callback、sandboxを追加した要求 |
+| `models_api` | 固定のAnthropic originに対する`GET /v1/models?limit=1000`で、資格情報と診断モデルの利用可能性を確認する読み取り専用要求 |
+| `messages_api` | 同じ診断モデルに`max_tokens=16`で送る、ツールを含まない最小の直接Messages API要求 |
+| `agent_sdk` | 同じ診断モデルにAgent SDKから送る、ツールなし、1 turnの最小要求 |
 
-各要求は1 turn、90秒以下、最大0.05 USDに制限する。診断中はツール利用を拒否し、応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / ERROR`、安全な固定エラーコードだけを含み、隣接するSHA-256 digestで完全性を確認できるようにする。Providerのエラー本文、応答本文、Prompt、Secret、費用明細は保存しない。
+`models_api`は有料生成を行わず30秒以下、`messages_api`は16 output token以下かつ30秒以下、`agent_sdk`は1 turn、90秒以下、最大0.05 USDとする。1回の診断で有料生成は最大2回である。直接APIはredirectを拒否し、API keyを固定のAnthropic origin以外へ転送しない。診断中は応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / ERROR`、安全な固定エラーコードだけを含み、隣接するSHA-256 digestで完全性を確認できるようにする。モデル一覧、Providerのエラー本文、応答本文、Prompt、Secret、費用明細は保存しない。
 
-3段階すべてが成功して正式要求だけが失敗する場合、接続、Structured Outputs、共通runtime controlsではなく、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
+`models_api`失敗は資格情報、HTTP status、固定モデルの利用権限を調査する。`messages_api`まで成功して`agent_sdk`だけが失敗する場合は、Agent SDKまたは同梱Claude CLIの要求組み立て・認証経路を調査する。3段階すべてが成功して正式要求だけが失敗する場合は、Structured Outputs、runtime controls、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
 
 ## 7. 変更時の契約試験
 
@@ -100,7 +100,8 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - 不正JSON、正式Schema不一致、不正な正式Schemaを区別して拒否する。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
-- 事前診断が段階的に機能を追加し、最初の失敗で停止する。
+- 事前診断が同じ固定モデルで直接APIとAgent SDKを比較し、最初の失敗で停止する。
+- 直接APIがredirectを拒否し、応答・エラー本文を安全な固定コードへ変換する。
 - 事前診断Artifactが`.ai-dev/local`外へ書き込めず、応答本文を含まない。
 
 実Claude受入では、API要求が受理されたことだけで合格にしない。復号後のstage別結果、ホスト検証、同一commit SHAの品質ゲートまで成功した証拠を残す。

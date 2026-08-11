@@ -34,9 +34,9 @@ Issue、stage、commit SHA、承認者が必要です。対象SHAがタスクの
 
 PR用の統合Workflowでは`provider-preflight`が正式な品質ゲートより先に実行されます。`provider-preflight.json`の`stage`と`error_code`だけを確認し、Providerのエラー本文をログやArtifactへ追加しないでください。
 
-- `basic`失敗: API接続、資格情報に対応するHTTP status、選択モデル、最小要求を確認します。
-- `structured_output`失敗: 固定転送SchemaとStructured Outputs対応を確認します。
-- `runtime_controls`失敗: ツール定義、permission callback、sandbox設定を確認します。
-- 3段階成功後に正式品質ゲートが失敗: 正式Prompt、task context、Agent固有設定との差を確認します。
+- `models_api`失敗: API接続、資格情報に対応するHTTP status、固定した`claude-sonnet-4-6`の利用可能性を確認します。`provider_model_unavailable`は、その資格情報から固定モデルが列挙されなかったことを示します。
+- `messages_api`失敗: 資格情報とモデル参照は成功しています。同じ固定モデルへの最小Messages API要求について、HTTP status、課金、権限、rate limitを確認します。
+- `agent_sdk`失敗: 直接Messages APIは成功しています。Agent SDKまたは同梱Claude CLIの要求組み立て、認証経路、実行環境を確認します。
+- 3段階成功後に正式品質ゲートが失敗: Structured Outputs、ツール・sandbox設定、正式Prompt、task context、Agent固有設定との差を確認します。
 
-診断は1段階0.05 USD以下、最大3段階です。再実行前に、対象commit SHAと既存Artifactを確認してください。
+`models_api`は読み取り専用です。有料生成は`messages_api`と`agent_sdk`の最大2回で、前者は16 output token以下、後者は1 turnかつ0.05 USD以下です。再実行前に、対象commit SHAと既存Artifactを確認してください。
