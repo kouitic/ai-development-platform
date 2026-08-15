@@ -57,7 +57,7 @@ from ai_dev_platform.domain.models import (
     TaskRecord,
     WorkflowState,
 )
-from ai_dev_platform.infrastructure.git import MockGitWorktree, SafeGitWorktree
+from ai_dev_platform.infrastructure.git import GitOperationError, MockGitWorktree, SafeGitWorktree
 from ai_dev_platform.infrastructure.github import GhCliGateway, GitHubError, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import (
     SQLiteStateStore,
@@ -114,6 +114,21 @@ def _gateway(root: Path, gateway_name: str) -> MockGitHubGateway | GhCliGateway:
     if selected not in {"gh", "mock"}:
         raise ValueError("AI_DEV_GITHUB_GATEWAY must be gh or mock")
     return GhCliGateway(root) if selected == "gh" else MockGitHubGateway()
+
+
+def _quality_git_gateway(
+    root: Path,
+    gateway: MockGitHubGateway | GhCliGateway,
+    protected_patterns: list[str],
+) -> SafeGitWorktree | None:
+    """Return a read-only configured Git adapter for exact local PR ranges."""
+    if isinstance(gateway, MockGitHubGateway):
+        return None
+    return SafeGitWorktree(
+        root,
+        writable_patterns=[],
+        protected_patterns=protected_patterns,
+    )
 
 
 def _seed_mock_gateway(
@@ -821,6 +836,7 @@ def _quality_command(
     loaded = _load(root)
     store = _store(root)
     gateway = _gateway(root, loaded.project.github.gateway)
+    git_gateway = _quality_git_gateway(root, gateway, loaded.project.protected_paths)
     try:
         existing = store.get_task_by_issue(issue)
     except TaskNotFoundError:
@@ -865,6 +881,7 @@ def _quality_command(
             pull_request_number=pr,
             stage=stage,
             verification=verification,
+            git=git_gateway,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -952,13 +969,18 @@ def verify_commit_command(
     if pull_request.head_sha != head_sha:
         console.print("[red]Pull Request head SHA mismatch.[/red]")
         raise typer.Exit(1)
-    files = [item.path for item in gateway.get_changed_files(pr)]
-    runner = (
-        MockVerificationRunner(diff_text=gateway.get_pull_request_diff(pr))
-        if isinstance(gateway, MockGitHubGateway)
-        else LocalVerificationRunner()
-    )
     try:
+        git_gateway = _quality_git_gateway(root, gateway, loaded.project.protected_paths)
+        files = (
+            git_gateway.changed_files_between(base_sha, head_sha)
+            if git_gateway is not None
+            else [item.path for item in gateway.get_changed_files(pr)]
+        )
+        runner = (
+            MockVerificationRunner(diff_text=gateway.get_pull_request_diff(pr))
+            if isinstance(gateway, MockGitHubGateway)
+            else LocalVerificationRunner()
+        )
         result = runner.run_committed(
             root,
             files,
@@ -967,7 +989,7 @@ def verify_commit_command(
             commit_sha=head_sha,
         )
         write_verification_result(output, result)
-    except VerificationError as exc:
+    except (GitOperationError, VerificationError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     if result.overall_status.value != "PASS":
@@ -1064,13 +1086,18 @@ def quality_gates_command(
     if pull_request.head_sha != head_sha:
         console.print("[red]Pull Request head SHA mismatch.[/red]")
         raise typer.Exit(1)
-    changed_files = [item.path for item in gateway.get_changed_files(pr)]
-    verification_runner = (
-        MockVerificationRunner(diff_text=gateway.get_pull_request_diff(pr))
-        if isinstance(gateway, MockGitHubGateway)
-        else LocalVerificationRunner()
-    )
     try:
+        git_gateway = _quality_git_gateway(root, gateway, loaded.project.protected_paths)
+        changed_files = (
+            git_gateway.changed_files_between(base_sha, head_sha)
+            if git_gateway is not None
+            else [item.path for item in gateway.get_changed_files(pr)]
+        )
+        verification_runner = (
+            MockVerificationRunner(diff_text=gateway.get_pull_request_diff(pr))
+            if isinstance(gateway, MockGitHubGateway)
+            else LocalVerificationRunner()
+        )
         verification = verification_runner.run_committed(
             root,
             changed_files,
@@ -1091,8 +1118,9 @@ def quality_gates_command(
             pull_request_number=pr,
             verification=verification,
             artifact_directory=(root / artifact_directory).resolve(),
+            git=git_gateway,
         )
-    except (ValueError, VerificationError) as exc:
+    except (GitOperationError, ValueError, VerificationError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(_task_table([task]))

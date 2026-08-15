@@ -43,6 +43,7 @@ from ai_dev_platform.domain.models import (
     VerificationStatus,
     WorkflowState,
 )
+from ai_dev_platform.infrastructure.git import GitOperationError, GitWorktreeGateway
 from ai_dev_platform.infrastructure.github import GitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore, TaskNotFoundError
 from ai_dev_platform.providers.base import AgentProvider
@@ -150,6 +151,7 @@ def prepare_quality_task(
     pull_request_number: int,
     stage: WorkflowState,
     verification: VerificationResult,
+    git: GitWorktreeGateway | None = None,
 ) -> TaskRecord:
     """Collect exact targets and accept only trusted, SHA-bound host verification."""
     issue = github.get_issue(issue_number)
@@ -169,7 +171,14 @@ def prepare_quality_task(
         raise ValueError("Pull Request head and base branches must differ")
     if scan_tree(root):
         raise ValueError("quality gate blocked because secret-like content was detected")
-    changed_files = [item.path for item in github.get_changed_files(pull_request_number)]
+    try:
+        changed_files = (
+            git.changed_files_between(verification.base_commit_sha, pull_request.head_sha)
+            if git is not None
+            else [item.path for item in github.get_changed_files(pull_request_number)]
+        )
+    except GitOperationError as exc:
+        raise ValueError("trusted commit range collection failed") from exc
     _assert_verification_target(
         verification,
         commit_sha=pull_request.head_sha,
@@ -374,6 +383,7 @@ def run_quality_gate(
     pull_request_number: int,
     stage: WorkflowState,
     verification: VerificationResult,
+    git: GitWorktreeGateway | None = None,
 ) -> TaskRecord:
     """Execute one ordered stage and publish its formal comment and unique Check."""
     task = prepare_quality_task(
@@ -384,6 +394,7 @@ def run_quality_gate(
         pull_request_number=pull_request_number,
         stage=stage,
         verification=verification,
+        git=git,
     )
     if stage == WorkflowState.SYSTEM_REVIEW and not task.evidence.developer_results:
         task = asyncio.run(
@@ -403,6 +414,7 @@ def run_quality_gate(
         store,
         root=root,
         github=github,
+        git=git,
     )
     return asyncio.run(runner.run_one_stage(task.task_id, stage))
 
@@ -418,6 +430,7 @@ def run_integrated_quality_gates(
     pull_request_number: int,
     verification: VerificationResult,
     artifact_directory: Path,
+    git: GitWorktreeGateway | None = None,
 ) -> TaskRecord:
     """Run System, Business, and QA once each in one process and verify each JSON handoff."""
     stages = (
@@ -437,6 +450,7 @@ def run_integrated_quality_gates(
             pull_request_number=pull_request_number,
             stage=workflow_stage,
             verification=verification,
+            git=git,
         )
         expected_next = {
             WorkflowState.SYSTEM_REVIEW: WorkflowState.BUSINESS_REVIEW,

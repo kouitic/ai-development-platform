@@ -10,7 +10,7 @@ from typing import Any, Literal, TypedDict, TypeVar
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
-from ai_dev_platform.application.context_builder import TaskContextBuilder
+from ai_dev_platform.application.context_builder import ContextCollectionError, TaskContextBuilder
 from ai_dev_platform.application.requirements import (
     find_requirements_approval,
     parse_structured_issue_requirements,
@@ -267,6 +267,8 @@ class WorkflowRunner:
                 WorkflowState.SECURITY_INCIDENT_REQUIRES_HUMAN,
                 "sensitive_agent_context_rejected",
             )
+        except ContextCollectionError as exc:
+            return self._move(task, WorkflowState.FAILED, exc.code)
         except Exception:
             return self._move(task, WorkflowState.FAILED, "context_collection_failed")
         request = AgentRequest(

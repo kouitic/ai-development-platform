@@ -146,3 +146,78 @@ def test_safe_git_uses_argv_and_enforces_reviewed_paths(
     worktree.push_work_branch("ai/issue-9-safe-change")
     assert all(isinstance(call, list) for call in calls)
     assert ["git", "push", "--set-upstream", "origin", "ai/issue-9-safe-change"] in calls
+
+
+def test_safe_git_collects_and_validates_diff_beyond_github_line_limit(tmp_path: Path) -> None:
+    root = tmp_path / "large-diff-repo"
+    root.mkdir()
+    for args in (
+        ("init",),
+        ("config", "user.email", "test@example.invalid"),
+        ("config", "user.name", "Test"),
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, shell=False)
+    (root / "README.md").write_text("# Test\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"], cwd=root, check=True, capture_output=True, shell=False
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        shell=False,
+    )
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        shell=False,
+    ).stdout.strip()
+    large_file = root / "large.py"
+    large_file.write_text(
+        "".join(f"value_{index} = {index}\n" for index in range(20_050)),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "add", "large.py"], cwd=root, check=True, capture_output=True, shell=False
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "large change"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        shell=False,
+    )
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        shell=False,
+    ).stdout.strip()
+    diff_text = subprocess.run(
+        ["git", "diff", "--no-ext-diff", "--binary", base_sha, head_sha, "--", "large.py"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        shell=False,
+    ).stdout
+    assert diff_text.count("\n") > 20_000
+
+    trusted = verification(["large.py"], diff_text, base_sha=base_sha).model_copy(
+        update={"commit_sha": head_sha}
+    )
+    worktree = SafeGitWorktree(root, writable_patterns=[], protected_patterns=[])
+
+    assert worktree.changed_files_between(base_sha, head_sha) == ["large.py"]
+    assert worktree.verified_commit_diff(trusted) == diff_text
+    with pytest.raises(GitOperationError, match="digest mismatch"):
+        worktree.verified_commit_diff(trusted.model_copy(update={"worktree_digest": "0" * 64}))

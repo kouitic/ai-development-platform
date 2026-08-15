@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ai_dev_platform.domain.models import AgentDefinition, FindingStatus, TaskRecord, WorkflowState
-from ai_dev_platform.infrastructure.git import GitWorktreeGateway
-from ai_dev_platform.infrastructure.github import GitHubGateway
+from ai_dev_platform.infrastructure.git import GitOperationError, GitWorktreeGateway
+from ai_dev_platform.infrastructure.github import GitHubError, GitHubGateway
 from ai_dev_platform.security.paths import assert_read_allowed
 from ai_dev_platform.security.scanner import SensitiveContentError, ensure_safe_to_persist
 
@@ -18,6 +18,14 @@ _SENSITIVE_KEY = re.compile(
     r"(?:_value|_content|_raw)?$",
     re.I,
 )
+
+
+class ContextCollectionError(RuntimeError):
+    """Sanitized context collection failure with a stable workflow code."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 def _unique_results(values: list[Any]) -> list[Any]:
@@ -234,19 +242,42 @@ class TaskContextBuilder:
         return sanitized
 
     def _review_context(self, task: TaskRecord, *, include_business: bool) -> dict[str, Any]:
-        pr_diff = (
-            self.github.get_pull_request_diff(task.pull_request_number)
-            if self.github is not None and task.pull_request_number is not None
-            else task.context.get("pull_request_diff", "")
+        verification = (
+            task.evidence.trusted_verification_results[-1]
+            if task.evidence.trusted_verification_results
+            else None
         )
-        changed_files = (
-            [
-                item.model_dump(mode="json")
-                for item in self.github.get_changed_files(task.pull_request_number)
-            ]
-            if self.github is not None and task.pull_request_number is not None
-            else task.context.get("changed_files", [])
-        )
+        if self.git is not None and verification is not None:
+            if verification.commit_sha != task.commit_sha:
+                raise ContextCollectionError("verified_commit_diff_target_mismatch")
+            try:
+                pr_diff = self.git.verified_commit_diff(verification)
+                changed_files = [
+                    {
+                        "path": path,
+                        "status": "changed",
+                        "additions": 0,
+                        "deletions": 0,
+                    }
+                    for path in self.git.changed_files_between(
+                        verification.base_commit_sha,
+                        verification.commit_sha,
+                    )
+                ]
+            except GitOperationError as exc:
+                raise ContextCollectionError("verified_commit_diff_rejected") from exc
+        elif self.github is not None and task.pull_request_number is not None:
+            try:
+                pr_diff = self.github.get_pull_request_diff(task.pull_request_number)
+                changed_files = [
+                    item.model_dump(mode="json")
+                    for item in self.github.get_changed_files(task.pull_request_number)
+                ]
+            except GitHubError as exc:
+                raise ContextCollectionError("github_pull_request_context_unavailable") from exc
+        else:
+            pr_diff = task.context.get("pull_request_diff", "")
+            changed_files = task.context.get("changed_files", [])
         result: dict[str, Any] = {
             "pull_request_diff": pr_diff,
             "changed_files": changed_files,

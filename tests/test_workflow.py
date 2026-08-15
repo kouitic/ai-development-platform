@@ -245,7 +245,7 @@ def test_mock_e2e_carries_system_finding_into_concrete_rework(
     finished = asyncio.run(runner.run(task.task_id))
     assert finished.state == WorkflowState.HUMAN_APPROVAL_REQUIRED
     assert finished.pull_request_number == 1
-    assert provider.requests[4].context["pull_request_diff"] == ""
+    assert provider.requests[4].context["pull_request_diff"] == "mock diff"
     rework_context = provider.requests[5].context
     assert rework_context["previous_findings"][0]["id"] == "SYS-005"
     assert rework_context["rework_requirements"][0]["required_fix"]

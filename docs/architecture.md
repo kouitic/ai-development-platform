@@ -81,6 +81,8 @@ Local VerificationのSecret検査は変更ファイルと必須設定ファイ�
 
 `GitHubGateway`はIssue作成、Issue取得、ブランチ作成、コメント投稿、ラベル更新に限定する。mainへのpush、PRマージ、本番デプロイAPIはMVP Gatewayに公開しない。実装は引数配列で`gh`を呼び出し、shell展開を避ける。MockによりAPIエラーと冪等な再実行を試験する。
 
+正式品質ゲートの変更ファイル一覧とPR差分本文は、GitHub APIのファイル件数・差分行数制限に依存させない。ホストVerificationと同じbase/head SHA、cleanなcheckout、正規化済み変更パスからローカルGitで完全取得し、変更ファイル一覧とdiff digestが`VerificationResult`に一致する場合だけReview Contextへ渡す。GitHubから取得するPR head SHAとの不一致、worktree変更、一覧欠落、digest不一致は安全側で停止する。
+
 確定要件と正式結果だけをGitHubへ同期する。未確定会話、Secret、本番相当データは同期しない。
 
 ## 7. SQLite状態管理

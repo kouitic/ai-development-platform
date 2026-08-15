@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,16 @@ from ai_dev_platform.domain.models import (
     RequirementsResult,
     TaskEvidence,
     TaskRecord,
+    VerificationCommandResult,
+    VerificationResult,
+    VerificationStatus,
     WorkflowState,
 )
+from ai_dev_platform.domain.models import TestStatus as RunStatus
 from ai_dev_platform.infrastructure.git import MockGitWorktree
-from ai_dev_platform.infrastructure.github import MockGitHubGateway
+from ai_dev_platform.infrastructure.github import GitHubError, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
+from ai_dev_platform.infrastructure.verification import digest_worktree
 from ai_dev_platform.security.scanner import SensitiveContentError
 
 
@@ -36,6 +42,14 @@ def requirements() -> RequirementsResult:
         out_of_scope=["production deployment"],
         human_decisions=["deployment target"],
     )
+
+
+class DiffLimitedGitHubGateway(MockGitHubGateway):
+    """Reproduce GitHub refusing a diff while other PR metadata remains available."""
+
+    def get_pull_request_diff(self, pr_number: int) -> str:
+        del pr_number
+        raise GitHubError("simulated GitHub diff limit")
 
 
 def test_issue_requirements_findings_diff_and_environment_reach_expected_context(
@@ -78,6 +92,73 @@ def test_issue_requirements_findings_diff_and_environment_reach_expected_context
     system = builder.build(task, WorkflowState.SYSTEM_REVIEW, loaded.agents["system-reviewer"])
     assert system["pull_request_diff"].startswith("diff --git")
     assert system["changed_files"] == []
+
+
+def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
+    initialized_project: Path,
+) -> None:
+    loaded = load_config(initialized_project)
+    github = DiffLimitedGitHubGateway()
+    github.issues[5] = {"title": "Large PR", "body": "Approved body", "labels": []}
+    github.pull_requests[6] = {
+        "number": 6,
+        "title": "Large PR",
+        "body": "",
+        "head_branch": "ai/issue-5-large-pr",
+        "base_branch": "main",
+        "head_sha": "a" * 40,
+        "url": "mock://pulls/6",
+    }
+    diff_text = "diff --git a/src/app.py b/src/app.py\n+value = 2\n"
+    now = datetime.now(UTC)
+    verification = VerificationResult(
+        worktree_digest=digest_worktree(["src/app.py"], diff_text),
+        base_commit_sha="b" * 40,
+        changed_files=["src/app.py"],
+        commands=[["mock", "verify"]],
+        results=[
+            VerificationCommandResult(
+                name="required",
+                argv=["mock", "verify"],
+                status=RunStatus.PASS,
+                exit_code=0,
+                evidence_reference="verification:required",
+            )
+        ],
+        overall_status=VerificationStatus.PASS,
+        started_at=now,
+        finished_at=now,
+        commit_sha="a" * 40,
+    )
+    task = TaskRecord(
+        task_id="issue-5",
+        issue_number=5,
+        state=WorkflowState.SYSTEM_REVIEW,
+        commit_sha="a" * 40,
+        branch="ai/issue-5-large-pr",
+        pull_request_number=6,
+        evidence=TaskEvidence(
+            requirements_result=requirements(),
+            trusted_verification_results=[verification],
+        ),
+    )
+    git = MockGitWorktree(
+        branch=task.branch,
+        files=["src/app.py"],
+        diff_text=diff_text,
+        base_commit_sha="b" * 40,
+    )
+
+    context = TaskContextBuilder(initialized_project, github=github, git=git).build(
+        task,
+        WorkflowState.SYSTEM_REVIEW,
+        loaded.agents["system-reviewer"],
+    )
+
+    assert context["pull_request_diff"] == diff_text
+    assert context["changed_files"] == [
+        {"path": "src/app.py", "status": "changed", "additions": 0, "deletions": 0}
+    ]
 
 
 def test_secret_in_issue_is_rejected_before_agent_context(initialized_project: Path) -> None:

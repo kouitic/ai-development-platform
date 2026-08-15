@@ -58,7 +58,7 @@ from ai_dev_platform.domain.models import (
     TestStatus as RunStatus,
 )
 from ai_dev_platform.infrastructure.git import MockGitWorktree
-from ai_dev_platform.infrastructure.github import MockGitHubGateway
+from ai_dev_platform.infrastructure.github import GitHubError, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
 from ai_dev_platform.infrastructure.verification import (
     LocalVerificationRunner,
@@ -71,6 +71,14 @@ from ai_dev_platform.infrastructure.verification import (
     write_verification_result,
 )
 from ai_dev_platform.providers.mock import MockAgentProvider
+
+
+class DiffLimitedGitHubGateway(MockGitHubGateway):
+    """Reject only PR diff retrieval to exercise the exact local range path."""
+
+    def get_pull_request_diff(self, pr_number: int) -> str:
+        del pr_number
+        raise GitHubError("simulated GitHub diff limit")
 
 
 def test_developer_traceability_failure_message_is_diagnostic_and_sanitized() -> None:
@@ -772,7 +780,6 @@ requirements:
         head_sha="a" * 40,
     ).model_dump(mode="json")
     gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
-    gateway.pull_request_diffs[7] = "reviewed diff"
     (initialized_project / "src").mkdir(exist_ok=True)
     (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
     requirement_items = parse_structured_issue_requirements(
@@ -824,7 +831,7 @@ def test_integrated_quality_gates_run_once_and_reject_artifact_sha_mismatch(
 ) -> None:
     loaded = load_config(initialized_project)
     store = SQLiteStateStore(initialized_project / ".ai-dev" / "local" / "integrated.sqlite3")
-    gateway = MockGitHubGateway()
+    gateway = DiffLimitedGitHubGateway()
     gateway.issues[41] = {
         "title": "Issue",
         "body": """```yaml
@@ -845,8 +852,6 @@ requirements:
         base_branch="main",
         head_sha="a" * 40,
     ).model_dump(mode="json")
-    gateway.changed_files[7] = [ChangedFile(path="src/app.py", status="modified")]
-    gateway.pull_request_diffs[7] = "reviewed diff"
     (initialized_project / "src").mkdir(exist_ok=True)
     (initialized_project / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
     requirement_items = parse_structured_issue_requirements(
@@ -857,6 +862,11 @@ requirements:
         f"ai-dev 要件承認: 承認\n要件ダイジェスト: {requirements_digest(requirement_items)}",
     )
     verification = _trusted_result("a" * 40, ["src/app.py"], "reviewed diff")
+    git = MockGitWorktree(
+        files=["src/app.py"],
+        diff_text="reviewed diff",
+        base_commit_sha="b" * 40,
+    )
     provider = MockAgentProvider()
     artifact_dir = initialized_project / ".ai-dev" / "local" / "artifacts"
 
@@ -870,6 +880,7 @@ requirements:
         pull_request_number=7,
         verification=verification,
         artifact_directory=artifact_dir,
+        git=git,
     )
     assert finished.state == WorkflowState.HUMAN_APPROVAL_REQUIRED
     assert [request.agent_id for request in provider.requests] == [
@@ -913,6 +924,7 @@ requirements:
             pull_request_number=7,
             stage=WorkflowState.QA_ASSESSMENT,
             verification=verification,
+            git=git,
         )
     system_path = artifact_dir / "system-review.json"
     with pytest.raises(QualityArtifactError, match="commit SHA mismatch"):
