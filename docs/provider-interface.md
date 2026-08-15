@@ -54,7 +54,9 @@ Claude結果は次の順で処理する。
 4. 復号結果を`AgentRequest.output_schema`で再検証する。
 5. stage別Pydanticモデルと業務検証を通過した後だけ、状態遷移へ使用する。
 
-エンベロープ違反、JSON復号失敗、配列やscalar、正式Schema違反はすべて`REJECTED / invalid_structured_output`とする。SDKが`structured_output`を提供しない場合に限り、互換経路として本文中の単一JSON objectを読み取るが、正式Schemaのホスト検証は省略しない。
+エンベロープ違反、JSON復号失敗、配列やscalar、正式Schema違反は、応答本文を保持せずに失敗境界だけを`REJECTED / invalid_structured_output_<detail>`へ分類する。`detail`は`transport_envelope`、`result_json`、`result_shape`、`host_schema`のいずれかとする。SDKが`structured_output`を提供しない場合に限り、互換経路として本文中の単一JSON objectを読み取り、復号できない場合は`text_json`とするが、正式Schemaのホスト検証は省略しない。
+
+正式Schemaがある要求で、失敗した候補が空ではなく128,000文字以下、かつSDKが報告した消費額から残タスク予算を確認できる場合だけ、ホスト側で形式修復を1回実施できる。形式修復は元の要求と同じ全体timeout内で行い、同じモデル、ツールなし、インターネットなし、1 turn、残タスク予算以内かつ最大0.50 USDとする。元のAgent定義やtask contextは再送せず、候補を命令ではないデータとして分離し、意味を変えずにJSON形式とSchema適合だけを修復させる。候補はメモリ内だけで扱い、結果、監査ログ、Artifactへ保存しない。修復後も不一致なら`REJECTED / invalid_structured_output_repair_failed_<detail>`とし、再試行しない。
 
 ## 5. Provider障害との区別
 
@@ -63,7 +65,8 @@ Claude結果は次の順で処理する。
 | 状態・コード | 意味 | 外部API呼出し |
 |---|---|---|
 | `REJECTED / invalid_output_schema` | ホストが構成した正式Schema自体が不正 | しない |
-| `REJECTED / invalid_structured_output` | Claude結果を復号できない、または正式Schemaに不一致 | 実施済みの場合がある |
+| `REJECTED / invalid_structured_output_<detail>` | Claude結果のエンベロープ、内部JSON、object形状、正式Schema、または互換本文JSONのどこで不一致になったかを安全に分類 | 実施済み。条件を満たす場合は形式修復を1回追加 |
+| `REJECTED / invalid_structured_output_repair_failed_<detail>` | 1回の制限付き形式修復後も同じ受信契約に不一致 | 形式修復を含め実施済み |
 | `ERROR / provider_api_error_<status>` | Claude APIが要求をHTTPエラーとして拒否 | 実施済み |
 | `ERROR / provider_api_error_400_model_unsupported` | 選択モデルがStructured Outputsに対応していないと安全に分類できた | 実施済み |
 | `ERROR / provider_api_error_400_schema_rejected` | 転送Schemaのコンパイル・検証拒否と安全に分類できた | 実施済み |
@@ -100,7 +103,9 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - 固定エンベロープが`result_json`だけを必須とし、追加プロパティを拒否する。
 - Developer、System Review、Business Review、QAの複雑な正式Schemaを`output_format`へ直接渡さない。
 - 有効な`result_json`を復号し、正式Schema一致時だけ成功する。
-- 不正JSON、正式Schema不一致、不正な正式Schemaを区別して拒否する。
+- エンベロープ、不正JSON、object形状、正式Schema不一致、不正な正式Schemaを安全な固定コードで区別して拒否する。
+- 残予算を確認できる修復可能な不一致だけを、ツールなし・インターネットなし・1 turn・最大0.50 USDで1回修復し、turn数と費用を合算する。
+- 残予算なし、費用不明、空または上限超過候補では形式修復を行わず、修復失敗時も応答本文を結果へ含めない。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
 - 直接APIとAgent SDKの正式要求が、課金・組織・Workspace・資格情報・要求形式を同じ安全な分類語彙へ変換する。

@@ -32,7 +32,7 @@ Secretや個人情報を含まない小さな変更IssueをIssue Formで作り�
 7. 通常CIのPython 3.12/3.13 matrixがMock-only frozen install、import、pytest、ruff、mypy、Source Package検査に成功し、Claude extraのimport確認にも成功することを確認する。
 8. `github-actions-pinning.md`とWorkflowを照合し、全外部ActionがNode.js 24対応のレビュー済みfull commit SHAへ固定され、version tagが残っていないことを確認する。
 9. system reviewへIssue本文、受入条件、PR diff、変更ファイル、検査集計が渡ることを、安全な参照IDで確認する。
-10. Claudeの構造化出力が[Agent Provider連携IF仕様](provider-interface.md)の固定`result_json`エンベロープで受理され、復号後のstage別結果が正式Schemaのホスト検証を通過することを確認する。`provider_api_error_400`が発生した場合は、転送Schemaを含むAPI要求拒否と、復号後の`invalid_structured_output`を区別して記録する。
+10. Claudeの構造化出力が[Agent Provider連携IF仕様](provider-interface.md)の固定`result_json`エンベロープで受理され、復号後のstage別結果が正式Schemaのホスト検証を通過することを確認する。`provider_api_error_400`が発生した場合はAPI要求拒否として記録し、受信後の不一致は`invalid_structured_output_<detail>`で失敗境界を確認する。形式修復が発生した場合は、ツールなし・インターネットなし・1 turn・最大0.50 USD・1回だけであること、費用とturnが合算されること、候補本文がログとArtifactへ保存されないことを確認する。
 11. major FindingでCheckがfailureとなり、Finding ID付きで実装へ戻ることを確認する。
 12. 修正後の再レビューPASSまでFindingが未解決一覧から消えないことを確認する。
 13. 統合`ai-quality-gates.yml`がSecret履歴検査後に4段階のProvider事前診断を行い、同一PR head SHAでSystem、Business、QAを一度ずつ順番に実行し、QAがtrusted verification、両レビュー、traceability、security scan、環境構成を統合することを確認する。事前診断を含む各JSON ArtifactとSHA-256も照合する。
