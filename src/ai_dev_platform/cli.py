@@ -1006,7 +1006,11 @@ def provider_preflight_command(
                 provider="claude",
                 commit_sha=_current_sha(root),
                 overall_status=(
-                    "ERROR" if any(stage.status == "ERROR" for stage in stages) else "PASS"
+                    "ERROR"
+                    if any(stage.status == "ERROR" for stage in stages)
+                    else "PASS_WITH_WARNINGS"
+                    if any(stage.status == "WARN" for stage in stages)
+                    else "PASS"
                 ),
                 stages=stages,
             )
@@ -1023,6 +1027,13 @@ def provider_preflight_command(
             f"[red]Provider preflight failed:[/red] stage={failed.stage}; code={failed.error_code}"
         )
         raise typer.Exit(1)
+    if report.overall_status == "PASS_WITH_WARNINGS":
+        warning = next(stage for stage in report.stages if stage.status == "WARN")
+        console.print(
+            "[yellow]Provider preflight completed with warning:[/yellow] "
+            f"stage={warning.stage}; code={warning.error_code}; artifact={destination}"
+        )
+        return
     console.print(f"[green]Provider preflight {report.overall_status}:[/green] {destination}")
 
 

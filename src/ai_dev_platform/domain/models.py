@@ -153,16 +153,21 @@ class ProviderPreflightStageResult(StrictModel):
     """Sanitized result for one provider-boundary diagnostic request."""
 
     stage: Literal["models_api", "token_count_api", "messages_api", "agent_sdk"]
-    status: Literal["PASS", "ERROR"]
+    status: Literal["PASS", "WARN", "ERROR"]
     error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
 
     @model_validator(mode="after")
     def error_code_matches_status(self) -> ProviderPreflightStageResult:
-        """Require one safe code only for a failed diagnostic stage."""
-        if self.status == "ERROR" and self.error_code is None:
-            raise ValueError("failed provider preflight stage requires an error code")
+        """Require one safe code for warnings and failures with a narrow warning policy."""
+        if self.status in {"WARN", "ERROR"} and self.error_code is None:
+            raise ValueError("non-passing provider preflight stage requires an error code")
         if self.status == "PASS" and self.error_code is not None:
             raise ValueError("passed provider preflight stage cannot have an error code")
+        if self.status == "WARN" and (
+            self.stage != "token_count_api"
+            or self.error_code != "provider_api_error_400_workspace_restriction"
+        ):
+            raise ValueError("only the Token Counting workspace restriction may be a warning")
         return self
 
 
@@ -172,12 +177,12 @@ class ProviderPreflightReport(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     provider: Literal["mock", "claude"]
     commit_sha: str = Field(min_length=7, max_length=64, pattern=r"^[0-9a-z]+$")
-    overall_status: Literal["PASS", "ERROR", "SKIPPED"]
+    overall_status: Literal["PASS", "PASS_WITH_WARNINGS", "ERROR", "SKIPPED"]
     stages: list[ProviderPreflightStageResult] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def status_matches_stages(self) -> ProviderPreflightReport:
-        """Keep skipped, passed, and failed reports internally consistent."""
+        """Keep skipped, passed, warned, and failed reports internally consistent."""
         if self.overall_status == "SKIPPED":
             if self.provider != "mock" or self.stages:
                 raise ValueError("only Mock preflight without stages may be skipped")
@@ -192,12 +197,14 @@ class ProviderPreflightReport(StrictModel):
             index for index, stage in enumerate(self.stages) if stage.status == "ERROR"
         ]
         has_error = bool(failed_indexes)
-        if (self.overall_status == "ERROR") != has_error:
+        has_warning = any(stage.status == "WARN" for stage in self.stages)
+        expected_status = "ERROR" if has_error else "PASS_WITH_WARNINGS" if has_warning else "PASS"
+        if self.overall_status != expected_status:
             raise ValueError("provider preflight status does not match its stages")
         if failed_indexes and failed_indexes != [len(self.stages) - 1]:
             raise ValueError("provider preflight must stop at its first failed stage")
-        if self.overall_status == "PASS" and len(self.stages) != 4:
-            raise ValueError("passed provider preflight requires all four stages")
+        if self.overall_status in {"PASS", "PASS_WITH_WARNINGS"} and len(self.stages) != 4:
+            raise ValueError("successful provider preflight requires all four stages")
         return self
 
 

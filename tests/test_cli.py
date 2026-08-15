@@ -11,9 +11,14 @@ from ai_dev_platform.application.requirements import (
     requirements_digest,
 )
 from ai_dev_platform.cli import app
-from ai_dev_platform.domain.models import TaskRecord, WorkflowState
+from ai_dev_platform.domain.models import (
+    ProviderPreflightStageResult,
+    TaskRecord,
+    WorkflowState,
+)
 from ai_dev_platform.infrastructure.github import GhCliGateway, MockGitHubGateway
 from ai_dev_platform.infrastructure.state_store import SQLiteStateStore
+from ai_dev_platform.providers.claude import ClaudeAgentProvider
 
 runner = CliRunner()
 
@@ -171,6 +176,42 @@ def test_cli_provider_preflight_skips_mock_without_api_call(tmp_path: Path) -> N
     assert '"provider":"mock"' in payload
     assert '"overall_status":"SKIPPED"' in payload
     assert artifact.with_suffix(".json.sha256").is_file()
+
+
+def test_cli_provider_preflight_succeeds_with_narrow_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "preflight-warning-project"
+    root.mkdir()
+    initialized = runner.invoke(app, ["init", "preflight-warning-project", "--path", str(root)])
+    assert initialized.exit_code == 0, initialized.output
+    provider = ClaudeAgentProvider()
+
+    async def fake_preflight(**_: object) -> list[ProviderPreflightStageResult]:
+        return [
+            ProviderPreflightStageResult(stage="models_api", status="PASS"),
+            ProviderPreflightStageResult(
+                stage="token_count_api",
+                status="WARN",
+                error_code="provider_api_error_400_workspace_restriction",
+            ),
+            ProviderPreflightStageResult(stage="messages_api", status="PASS"),
+            ProviderPreflightStageResult(stage="agent_sdk", status="PASS"),
+        ]
+
+    monkeypatch.setattr(provider, "preflight", fake_preflight)
+    monkeypatch.setattr(cli_module, "create_provider", lambda *_args, **_kwargs: provider)
+    monkeypatch.setattr(cli_module, "_current_sha", lambda _root: "a" * 40)
+
+    result = runner.invoke(app, ["provider-preflight", "--path", str(root)])
+
+    assert result.exit_code == 0, result.output
+    assert "completed with warning" in result.output
+    artifact = root / ".ai-dev" / "local" / "quality-artifacts" / "provider-preflight.json"
+    payload = artifact.read_text(encoding="utf-8")
+    assert '"overall_status":"PASS_WITH_WARNINGS"' in payload
+    assert '"status":"WARN"' in payload
 
 
 def test_cli_init_conflict_and_missing_task(tmp_path: Path) -> None:

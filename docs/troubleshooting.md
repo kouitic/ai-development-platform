@@ -35,8 +35,9 @@ Issue、stage、commit SHA、承認者が必要です。対象SHAがタスクの
 PR用の統合Workflowでは`provider-preflight`が正式な品質ゲートより先に実行されます。`provider-preflight.json`の`stage`と`error_code`だけを確認し、Providerのエラー本文をログやArtifactへ追加しないでください。
 
 - `models_api`失敗: API接続、資格情報に対応するHTTP status、固定した`claude-sonnet-4-6`の利用可能性を確認します。`provider_model_unavailable`は、その資格情報から固定モデルが列挙されなかったことを示します。
-- `token_count_api`失敗: モデル参照は成功しています。同じ固定モデルとuser messageの入力形式、HTTP status、利用権限を確認します。
-- `messages_api`失敗: 資格情報、モデル参照、Token Countingは成功しています。`provider_api_error_400_billing_credit_balance_low`ならClaude ConsoleのAPI credit残高、`provider_api_error_400_max_tokens_invalid`なら出力上限、その他の固定コードなら組織・Workspace・地域・モデル制約を確認します。
+- `token_count_api`警告: `provider_api_error_400_workspace_restriction`だけは`WARN`となり、全4段階が完走すれば`PASS_WITH_WARNINGS`になります。この警告はToken Counting API固有の制約を示し、Messages APIとAgent SDKの成否を後続段階で別に確認します。
+- `token_count_api`失敗: Workspace警告以外は停止します。モデル参照は成功しているため、同じ固定モデルとuser messageの入力形式、HTTP status、利用権限を確認します。
+- `messages_api`失敗: 資格情報とモデル参照は成功しています。Token Countingが`PASS`または許可済み`WARN`であることを確認し、`provider_api_error_400_billing_credit_balance_low`ならClaude ConsoleのAPI credit残高、`provider_api_error_400_max_tokens_invalid`なら出力上限、その他の固定コードなら組織・Workspace・地域・モデル制約を確認します。
 - `agent_sdk`失敗: 直接Messages APIは成功しています。Agent SDKまたは同梱Claude CLIの要求組み立て、認証経路、実行環境を確認します。
 - 4段階成功後に正式品質ゲートが失敗: Structured Outputs、ツール・sandbox設定、正式Prompt、task context、Agent固有設定との差を確認します。
 

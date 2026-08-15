@@ -475,6 +475,100 @@ def test_claude_provider_preflight_compares_direct_api_and_agent_sdk(
     assert "output_format" not in observed_options[0]
 
 
+def test_claude_provider_preflight_continues_after_token_count_workspace_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    sensitive_detail = "sensitive-workspace-detail-must-not-persist"
+
+    async def query(**_: object):
+        nonlocal calls
+        calls += 1
+        yield SimpleNamespace(is_error=False)
+
+    fake_sdk(monkeypatch, query)
+    opener = fake_direct_api(
+        monkeypatch,
+        [
+            {"data": [{"id": "claude-sonnet-4-6"}]},
+            urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages/count_tokens",
+                400,
+                "Bad Request",
+                None,
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": (
+                                    "Token Counting is restricted for this workspace. "
+                                    f"{sensitive_detail}"
+                                ),
+                            },
+                        }
+                    ).encode("utf-8")
+                ),
+            ),
+            {"type": "message", "model": "claude-sonnet-4-6", "content": []},
+        ],
+    )
+
+    results = asyncio.run(ClaudeAgentProvider().preflight())
+
+    assert calls == 1
+    assert len(opener.requests) == 3
+    assert [result.status for result in results] == ["PASS", "WARN", "PASS", "PASS"]
+    assert results[1].error_code == "provider_api_error_400_workspace_restriction"
+    assert sensitive_detail not in json.dumps(
+        [result.model_dump(mode="json") for result in results]
+    )
+
+
+def test_claude_provider_preflight_stops_at_other_token_count_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def query(**_: object):
+        nonlocal calls
+        calls += 1
+        yield SimpleNamespace(is_error=False)
+
+    fake_sdk(monkeypatch, query)
+    opener = fake_direct_api(
+        monkeypatch,
+        [
+            {"data": [{"id": "claude-sonnet-4-6"}]},
+            urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages/count_tokens",
+                400,
+                "Bad Request",
+                None,
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "max_tokens is invalid for this request.",
+                            },
+                        }
+                    ).encode("utf-8")
+                ),
+            ),
+        ],
+    )
+
+    results = asyncio.run(ClaudeAgentProvider().preflight())
+
+    assert calls == 0
+    assert len(opener.requests) == 2
+    assert [result.status for result in results] == ["PASS", "ERROR"]
+    assert results[-1].error_code == "provider_api_error_400_max_tokens_invalid"
+
+
 def test_claude_provider_preflight_stops_at_direct_messages_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -50,6 +50,7 @@ _PREFLIGHT_DIRECT_TIMEOUT_SECONDS = 30.0
 _PREFLIGHT_MAX_RESPONSE_BYTES = 2_000_000
 _PREFLIGHT_MAX_ERROR_BYTES = 64_000
 ClaudePreflightStage = Literal["models_api", "token_count_api", "messages_api", "agent_sdk"]
+_NON_BLOCKING_TOKEN_COUNT_ERROR = "provider_api_error_400_workspace_restriction"
 
 _SAFE_RESULT_SUBTYPE_CODES = {
     "error_during_execution": "provider_execution_error",
@@ -440,11 +441,18 @@ class ClaudeAgentProvider:
             try:
                 await asyncio.to_thread(probe, api_key, direct_timeout)
             except _ProviderPreflightError as exc:
-                result = ProviderPreflightStageResult(
-                    stage=stage,
-                    status="ERROR",
-                    error_code=exc.code,
-                )
+                if stage == "token_count_api" and exc.code == _NON_BLOCKING_TOKEN_COUNT_ERROR:
+                    result = ProviderPreflightStageResult(
+                        stage=stage,
+                        status="WARN",
+                        error_code=exc.code,
+                    )
+                else:
+                    result = ProviderPreflightStageResult(
+                        stage=stage,
+                        status="ERROR",
+                        error_code=exc.code,
+                    )
             except Exception:  # Direct API exception text is intentionally discarded.
                 result = ProviderPreflightStageResult(
                     stage=stage,
