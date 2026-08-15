@@ -10,7 +10,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from ai_dev_platform.domain.models import ChangedFile, IssueComment, IssueData, PullRequestData
+from ai_dev_platform.domain.models import (
+    ChangedFile,
+    GitHubCheckRunEvidence,
+    IssueComment,
+    IssueData,
+    PullRequestData,
+)
 from ai_dev_platform.security.scanner import ensure_safe_to_persist
 
 
@@ -52,6 +58,8 @@ class GitHubGateway(Protocol):
 
     def get_changed_files(self, pr_number: int) -> list[ChangedFile]: ...
 
+    def get_commit_check_runs(self, commit_sha: str) -> list[GitHubCheckRunEvidence]: ...
+
     def add_labels(self, issue_number: int, labels: list[str]) -> None: ...
 
     def remove_labels(self, issue_number: int, labels: list[str]) -> None: ...
@@ -81,6 +89,7 @@ class MockGitHubGateway:
     comments: list[tuple[int, str]] = field(default_factory=list)
     branches: list[str] = field(default_factory=list)
     check_results: list[dict[str, str]] = field(default_factory=list)
+    commit_check_runs: dict[str, list[GitHubCheckRunEvidence]] = field(default_factory=dict)
     changed_files: dict[int, list[ChangedFile]] = field(default_factory=dict)
     pull_request_diffs: dict[int, str] = field(default_factory=dict)
     pushed_branches: set[str] = field(default_factory=set)
@@ -219,6 +228,26 @@ class MockGitHubGateway:
         if pr_number not in self.pull_requests:
             raise GitHubError("Pull request was not found")
         return list(self.changed_files.get(pr_number, []))
+
+    def get_commit_check_runs(self, commit_sha: str) -> list[GitHubCheckRunEvidence]:
+        """Return configured checks or deterministic successful matrix checks for Mock runs."""
+        self._maybe_fail()
+        configured = self.commit_check_runs.get(commit_sha)
+        if configured is not None:
+            return list(configured)
+        completed_at = datetime.now(UTC)
+        return [
+            GitHubCheckRunEvidence(
+                check_run_id=index,
+                name=f"quality ({version})",
+                status="completed",
+                conclusion="success",
+                commit_sha=commit_sha,
+                details_url=f"mock://checks/{index}",
+                completed_at=completed_at,
+            )
+            for index, version in enumerate(("3.12", "3.13"), start=1)
+        ]
 
     def add_labels(self, issue_number: int, labels: list[str]) -> None:
         self._maybe_fail()
@@ -447,6 +476,45 @@ class GhCliGateway:
             for item in files
             if isinstance(item, dict)
         ]
+
+    def get_commit_check_runs(self, commit_sha: str) -> list[GitHubCheckRunEvidence]:
+        """Read sanitized Check Run metadata for one exact full commit SHA."""
+        if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            raise GitHubError("a full lowercase commit SHA is required for Check Runs")
+        raw = self._json(
+            [
+                "api",
+                f"repos/{{owner}}/{{repo}}/commits/{commit_sha}/check-runs?per_page=100&filter=all",
+            ]
+        )
+        values = raw.get("check_runs")
+        if not isinstance(values, list):
+            raise GitHubError("GitHub Check Runs response was invalid")
+        checks: list[GitHubCheckRunEvidence] = []
+        try:
+            for item in values:
+                if not isinstance(item, dict):
+                    raise ValueError("invalid Check Run item")
+                checks.append(
+                    GitHubCheckRunEvidence(
+                        check_run_id=int(item["id"]),
+                        name=str(item["name"]),
+                        status=str(item["status"]),
+                        conclusion=(
+                            str(item["conclusion"]) if item.get("conclusion") is not None else None
+                        ),
+                        commit_sha=str(item["head_sha"]),
+                        details_url=(
+                            str(item["details_url"])
+                            if item.get("details_url") is not None
+                            else None
+                        ),
+                        completed_at=item.get("completed_at"),
+                    )
+                )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GitHubError("GitHub Check Runs response was invalid") from exc
+        return checks
 
     def add_labels(self, issue_number: int, labels: list[str]) -> None:
         if not labels:

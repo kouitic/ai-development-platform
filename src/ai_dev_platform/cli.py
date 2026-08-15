@@ -16,6 +16,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ai_dev_platform.application.approval_service import record_decision
+from ai_dev_platform.application.ci_evidence import (
+    collect_required_ci_evidence,
+    read_ci_evidence_report,
+    write_ci_evidence_report,
+)
 from ai_dev_platform.application.conversation import (
     merge_confirmed_decisions,
     record_conversation_answer,
@@ -883,7 +888,7 @@ def _quality_command(
             verification=verification,
             git=git_gateway,
         )
-    except ValueError as exc:
+    except (GitHubError, ValueError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(_task_table([task]))
@@ -1108,6 +1113,18 @@ def quality_gates_command(
         verification_path = (root / artifact_directory / "verification.json").resolve()
         write_verification_result(verification_path, verification)
         verification = read_verification_result(verification_path)
+        ci_report = collect_required_ci_evidence(
+            gateway,
+            head_sha,
+            loaded.verification.required_ci_checks,
+            timeout_seconds=loaded.verification.ci_wait_timeout_seconds,
+        )
+        ci_evidence_path = (root / artifact_directory / "ci-evidence.json").resolve()
+        write_ci_evidence_report(ci_evidence_path, ci_report)
+        ci_report = read_ci_evidence_report(
+            ci_evidence_path,
+            expected_commit_sha=head_sha,
+        )
         task = run_integrated_quality_gates(
             loaded,
             create_provider(loaded.project, root=root),
@@ -1119,8 +1136,9 @@ def quality_gates_command(
             verification=verification,
             artifact_directory=(root / artifact_directory).resolve(),
             git=git_gateway,
+            ci_check_results=ci_report.checks,
         )
-    except (GitOperationError, ValueError, VerificationError) as exc:
+    except (GitHubError, GitOperationError, ValueError, VerificationError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(_task_table([task]))

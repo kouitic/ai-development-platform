@@ -551,6 +551,11 @@ class VerificationPolicy(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     commands: list[VerificationCommand] = Field(min_length=1)
     secret_scan: bool = True
+    required_ci_checks: list[str] = Field(
+        default_factory=lambda: ["quality (3.12)", "quality (3.13)"],
+        min_length=1,
+    )
+    ci_wait_timeout_seconds: int = Field(default=900, ge=1, le=1800)
 
 
 class VerificationCommandResult(StrictModel):
@@ -592,6 +597,32 @@ class VerificationResult(StrictModel):
     finished_at: datetime
     commit_sha: str | None = None
     invalidated_reason: str | None = None
+
+
+class GitHubCheckRunEvidence(StrictModel):
+    """Sanitized GitHub Check Run evidence bound to one exact commit."""
+
+    check_run_id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=100)
+    status: str = Field(pattern=r"^[a-z_]+$")
+    conclusion: str | None = Field(default=None, pattern=r"^[a-z_]+$")
+    commit_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|mock[0-9]{36})$")
+    details_url: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        pattern=r"^(?:https://github\.com/|mock://checks/)",
+    )
+    completed_at: datetime | None = None
+
+
+class CiEvidenceReport(StrictModel):
+    """Digest-protected successful CI evidence supplied to formal reviewers."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    commit_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|mock[0-9]{36})$")
+    required_check_names: list[str] = Field(min_length=1)
+    checks: list[GitHubCheckRunEvidence] = Field(min_length=1)
 
 
 class RequirementImplementationReference(StrictModel):
@@ -709,6 +740,7 @@ class TaskEvidence(StrictModel):
     developer_results: list[DeveloperResult] = Field(default_factory=list)
     agent_reported_test_results: list[TestRunResult] = Field(default_factory=list)
     trusted_verification_results: list[VerificationResult] = Field(default_factory=list)
+    trusted_ci_results: list[GitHubCheckRunEvidence] = Field(default_factory=list)
     system_reviews: list[SystemReviewResult] = Field(default_factory=list)
     business_reviews: list[BusinessReviewResult] = Field(default_factory=list)
     qa_assessments: list[QaAssessmentResult] = Field(default_factory=list)

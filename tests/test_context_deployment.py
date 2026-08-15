@@ -15,6 +15,7 @@ from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
     Decision,
     EvidenceReference,
+    GitHubCheckRunEvidence,
     RequirementsResult,
     TaskEvidence,
     TaskRecord,
@@ -130,6 +131,18 @@ def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
         finished_at=now,
         commit_sha="a" * 40,
     )
+    ci_results = [
+        GitHubCheckRunEvidence(
+            check_run_id=index,
+            name=f"quality ({version})",
+            status="completed",
+            conclusion="success",
+            commit_sha="a" * 40,
+            details_url=f"mock://checks/{index}",
+            completed_at=now,
+        )
+        for index, version in enumerate(("3.12", "3.13"), start=1)
+    ]
     task = TaskRecord(
         task_id="issue-5",
         issue_number=5,
@@ -140,6 +153,7 @@ def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
         evidence=TaskEvidence(
             requirements_result=requirements(),
             trusted_verification_results=[verification],
+            trusted_ci_results=ci_results,
         ),
     )
     git = MockGitWorktree(
@@ -159,6 +173,11 @@ def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
     assert context["changed_files"] == [
         {"path": "src/app.py", "status": "changed", "additions": 0, "deletions": 0}
     ]
+    assert [result["name"] for result in context["trusted_ci_results"]] == [
+        "quality (3.12)",
+        "quality (3.13)",
+    ]
+    assert all(result["commit_sha"] == "a" * 40 for result in context["trusted_ci_results"])
 
 
 def test_secret_in_issue_is_rejected_before_agent_context(initialized_project: Path) -> None:

@@ -25,6 +25,17 @@
         }
       }
     },
-    "secret_scan": {"type": "boolean"}
+    "secret_scan": {"type": "boolean"},
+    "required_ci_checks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 100}
+    },
+    "ci_wait_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1800
+    }
   }
 }

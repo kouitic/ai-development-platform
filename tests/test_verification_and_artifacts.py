@@ -889,6 +889,12 @@ requirements:
         "business-reviewer",
         "qa",
     ]
+    system_context = provider.requests[1].context
+    assert [item["name"] for item in system_context["trusted_ci_results"]] == [
+        "quality (3.12)",
+        "quality (3.13)",
+    ]
+    assert all(item["commit_sha"] == "a" * 40 for item in system_context["trusted_ci_results"])
     assert [item["name"] for item in gateway.check_results] == [
         "ai-quality/system-review",
         "ai-quality/business-review",

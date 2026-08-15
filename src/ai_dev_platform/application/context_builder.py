@@ -286,6 +286,9 @@ class TaskContextBuilder:
             "trusted_verification_results": [
                 item.model_dump(mode="json") for item in task.evidence.trusted_verification_results
             ],
+            "trusted_ci_results": [
+                item.model_dump(mode="json") for item in task.evidence.trusted_ci_results
+            ],
             "static_analysis_results": task.context.get("static_analysis_results", []),
             "secret_scan_results": task.context.get("secret_scan_results", []),
             "dependency_scan_results": task.context.get("dependency_scan_results", []),

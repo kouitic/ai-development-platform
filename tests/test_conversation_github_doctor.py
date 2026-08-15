@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -89,6 +90,52 @@ def test_gh_gateway_reads_japanese_json_as_utf8(
     assert issue.body == "日本語の要件"
     assert options["encoding"] == "utf-8"
     assert options["errors"] == "strict"
+
+
+def test_gh_gateway_reads_commit_bound_check_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit_sha = "a" * 40
+    observed: list[str] = []
+
+    def succeeded(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        observed.extend(args)
+        stdout = json.dumps(
+            {
+                "check_runs": [
+                    {
+                        "id": 101,
+                        "name": "quality (3.12)",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": commit_sha,
+                        "details_url": "https://github.com/example/project/runs/101",
+                        "completed_at": "2026-08-15T12:00:00Z",
+                    },
+                    {
+                        "id": 102,
+                        "name": "unrelated pending check",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "head_sha": commit_sha,
+                        "details_url": None,
+                        "completed_at": None,
+                    },
+                ]
+            }
+        )
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", succeeded)
+
+    checks = GhCliGateway(tmp_path).get_commit_check_runs(commit_sha)
+
+    assert checks[0].name == "quality (3.12)"
+    assert checks[0].commit_sha == commit_sha
+    assert checks[0].conclusion == "success"
+    assert checks[1].details_url is None
+    assert any(f"commits/{commit_sha}/check-runs" in argument for argument in observed)
 
 
 def test_doctor_never_reports_environment_values(

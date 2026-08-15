@@ -4,6 +4,10 @@ commands:
     argv: [uv, run, pytest]
     required: true
     timeout_seconds: 1200
+  - name: ruff-format
+    argv: [uv, run, ruff, format, --check, .]
+    required: true
+    timeout_seconds: 300
   - name: ruff-check
     argv: [uv, run, ruff, check, .]
     required: true
@@ -12,8 +16,14 @@ commands:
     argv: [uv, run, mypy]
     required: true
     timeout_seconds: 600
+  - name: project-validate
+    argv: [uv, run, ai-dev, validate]
+    required: true
+    timeout_seconds: 300
   - name: dependency-vulnerability-scan
     argv: [uv, run, --with, pip-audit, pip-audit, --cache-dir, .ai-dev/local/pip-audit-cache]
     required: true
     timeout_seconds: 600
 secret_scan: true
+required_ci_checks: ["quality (3.12)", "quality (3.13)"]
+ci_wait_timeout_seconds: 900

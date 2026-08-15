@@ -83,6 +83,8 @@ Local VerificationのSecret検査は変更ファイルと必須設定ファイ�
 
 正式品質ゲートの変更ファイル一覧とPR差分本文は、GitHub APIのファイル件数・差分行数制限に依存させない。ホストVerificationと同じbase/head SHA、cleanなcheckout、正規化済み変更パスからローカルGitで完全取得し、変更ファイル一覧とdiff digestが`VerificationResult`に一致する場合だけReview Contextへ渡す。GitHubから取得するPR head SHAとの不一致、worktree変更、一覧欠落、digest不一致は安全側で停止する。
 
+Python 3.12/3.13のCI証拠は、同じhead SHAに結び付いたGitHub Check Runsからホストが取得する。設定された必須Checkがすべて`completed/success`になるまで上限時間内で待機し、Check Run ID、名前、対象SHA、完了時刻、GitHub URLだけをdigest付きの`ci-evidence.json`へ保存する。失敗、未完了、欠落、別SHAの結果は正式レビューへ渡さない。検証済みCI証拠はSystem ReviewのContextと`TaskEvidence`へ明示的に含め、Business ReviewとQAにも同一証拠を引き継ぐ。
+
 確定要件と正式結果だけをGitHubへ同期する。未確定会話、Secret、本番相当データは同期しない。
 
 ## 7. SQLite状態管理

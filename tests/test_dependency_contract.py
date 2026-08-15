@@ -62,6 +62,18 @@ def test_ci_runs_clean_install_contract_on_python_312_and_313() -> None:
     assert 'python -c "import claude_agent_sdk"' in workflow
 
 
+def test_host_verification_requires_format_validate_and_ci_matrix_evidence() -> None:
+    policy_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    for policy_root in policy_roots:
+        policy = (policy_root / ".ai-dev" / "policies" / "verification.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert "argv: [uv, run, ruff, format, --check, .]" in policy
+        assert "argv: [uv, run, ai-dev, validate]" in policy
+        assert 'required_ci_checks: ["quality (3.12)", "quality (3.13)"]' in policy
+        assert "ci_wait_timeout_seconds: 900" in policy
+
+
 def test_gitleaks_actions_receive_the_automatic_github_token() -> None:
     workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
     for workflow_root in workflow_roots:

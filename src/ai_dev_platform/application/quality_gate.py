@@ -6,6 +6,7 @@ import asyncio
 import re
 from pathlib import Path
 
+from ai_dev_platform.application.ci_evidence import collect_required_ci_evidence
 from ai_dev_platform.application.quality_artifacts import (
     build_quality_artifact,
     read_quality_artifact,
@@ -31,6 +32,7 @@ from ai_dev_platform.domain.models import (
     Decision,
     DeveloperResult,
     EvidenceReference,
+    GitHubCheckRunEvidence,
     IssueData,
     RequirementItem,
     RequirementsApproval,
@@ -90,6 +92,7 @@ def _quality_gate_failure_message(
 def _bootstrap_evidence(
     issue: IssueData,
     verification: VerificationResult,
+    ci_check_results: list[GitHubCheckRunEvidence],
     requirement_items: list[RequirementItem],
     approval: RequirementsApproval,
 ) -> TaskEvidence:
@@ -118,6 +121,7 @@ def _bootstrap_evidence(
         requirements_result=requirements,
         requirements_approval=approval,
         trusted_verification_results=[verification],
+        trusted_ci_results=list(ci_check_results),
         traceability=[
             TraceabilityRecord(requirement_id=requirement.id) for requirement in requirement_items
         ],
@@ -142,6 +146,36 @@ def _assert_verification_target(
         raise ValueError("trusted verification contains a failed or missing required result")
 
 
+def _validated_ci_results(
+    results: list[GitHubCheckRunEvidence],
+    *,
+    commit_sha: str,
+    required_names: list[str],
+) -> list[GitHubCheckRunEvidence]:
+    """Return exactly one latest successful Check Run for every required name."""
+    if len(required_names) != len(set(required_names)):
+        raise ValueError("required CI check names must be unique")
+    latest: dict[str, GitHubCheckRunEvidence] = {}
+    for result in results:
+        if result.commit_sha != commit_sha:
+            raise ValueError("trusted CI evidence belongs to another commit")
+        current = latest.get(result.name)
+        if current is None or result.check_run_id > current.check_run_id:
+            latest[result.name] = result
+    if any(name not in latest for name in required_names):
+        raise ValueError("trusted CI evidence is missing a required check")
+    selected = [latest[name] for name in required_names]
+    if any(
+        result.status != "completed"
+        or result.conclusion != "success"
+        or result.details_url is None
+        or result.completed_at is None
+        for result in selected
+    ):
+        raise ValueError("trusted CI evidence contains an incomplete or failed check")
+    return selected
+
+
 def prepare_quality_task(
     store: SQLiteStateStore,
     github: GitHubGateway,
@@ -152,6 +186,8 @@ def prepare_quality_task(
     stage: WorkflowState,
     verification: VerificationResult,
     git: GitWorktreeGateway | None = None,
+    ci_check_results: list[GitHubCheckRunEvidence] | None = None,
+    required_ci_check_names: list[str] | None = None,
 ) -> TaskRecord:
     """Collect exact targets and accept only trusted, SHA-bound host verification."""
     issue = github.get_issue(issue_number)
@@ -184,6 +220,17 @@ def prepare_quality_task(
         commit_sha=pull_request.head_sha,
         changed_files=changed_files,
     )
+    required_names = required_ci_check_names or ["quality (3.12)", "quality (3.13)"]
+    supplied_ci_results = (
+        ci_check_results
+        if ci_check_results is not None
+        else github.get_commit_check_runs(pull_request.head_sha)
+    )
+    validated_ci_results = _validated_ci_results(
+        supplied_ci_results,
+        commit_sha=pull_request.head_sha,
+        required_names=required_names,
+    )
     try:
         task = store.get_task_by_issue(issue_number)
     except TaskNotFoundError:
@@ -207,6 +254,7 @@ def prepare_quality_task(
                 evidence=_bootstrap_evidence(
                     issue,
                     verification,
+                    validated_ci_results,
                     requirement_items,
                     requirements_approval,
                 ),
@@ -235,6 +283,11 @@ def prepare_quality_task(
             latest,
             commit_sha=pull_request.head_sha,
             changed_files=changed_files,
+        )
+        _validated_ci_results(
+            task.evidence.trusted_ci_results,
+            commit_sha=pull_request.head_sha,
+            required_names=required_names,
         )
     return task
 
@@ -384,8 +437,19 @@ def run_quality_gate(
     stage: WorkflowState,
     verification: VerificationResult,
     git: GitWorktreeGateway | None = None,
+    ci_check_results: list[GitHubCheckRunEvidence] | None = None,
 ) -> TaskRecord:
     """Execute one ordered stage and publish its formal comment and unique Check."""
+    verification_policy = loaded.verification
+    if verification_policy is None:
+        raise ValueError("host verification policy is not configured")
+    if ci_check_results is None:
+        ci_check_results = collect_required_ci_evidence(
+            github,
+            verification.commit_sha or "",
+            verification_policy.required_ci_checks,
+            timeout_seconds=verification_policy.ci_wait_timeout_seconds,
+        ).checks
     task = prepare_quality_task(
         store,
         github,
@@ -395,6 +459,8 @@ def run_quality_gate(
         stage=stage,
         verification=verification,
         git=git,
+        ci_check_results=ci_check_results,
+        required_ci_check_names=verification_policy.required_ci_checks,
     )
     if stage == WorkflowState.SYSTEM_REVIEW and not task.evidence.developer_results:
         task = asyncio.run(
@@ -431,8 +497,19 @@ def run_integrated_quality_gates(
     verification: VerificationResult,
     artifact_directory: Path,
     git: GitWorktreeGateway | None = None,
+    ci_check_results: list[GitHubCheckRunEvidence] | None = None,
 ) -> TaskRecord:
     """Run System, Business, and QA once each in one process and verify each JSON handoff."""
+    verification_policy = loaded.verification
+    if verification_policy is None:
+        raise ValueError("host verification policy is not configured")
+    if ci_check_results is None:
+        ci_check_results = collect_required_ci_evidence(
+            github,
+            verification.commit_sha or "",
+            verification_policy.required_ci_checks,
+            timeout_seconds=verification_policy.ci_wait_timeout_seconds,
+        ).checks
     stages = (
         (WorkflowState.SYSTEM_REVIEW, ReviewType.SYSTEM, "system-review.json"),
         (WorkflowState.BUSINESS_REVIEW, ReviewType.BUSINESS, "business-review.json"),
@@ -451,6 +528,7 @@ def run_integrated_quality_gates(
             stage=workflow_stage,
             verification=verification,
             git=git,
+            ci_check_results=ci_check_results,
         )
         expected_next = {
             WorkflowState.SYSTEM_REVIEW: WorkflowState.BUSINESS_REVIEW,
