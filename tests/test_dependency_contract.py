@@ -101,20 +101,35 @@ def test_quality_workflows_install_claude_sandbox_dependencies() -> None:
         )
 
 
-def test_quality_workflows_run_sanitized_provider_preflight_before_quality_gates() -> None:
+def test_quality_workflows_require_manual_approved_issue_without_paid_preflight() -> None:
     workflow_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
     for workflow_root in workflow_roots:
         quality = (workflow_root / ".github" / "workflows" / "ai-quality-gates.yml").read_text(
             encoding="utf-8"
         )
-        assert "uv run ai-dev provider-preflight" in quality
-        assert "provider-preflight.json" in quality
-        assert (
-            "AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}"
-            in quality
-        )
-        assert quality.index("Secret history scan") < quality.index("provider-preflight")
-        assert quality.index("provider-preflight") < quality.index("ai-dev quality-gates")
+        assert "workflow_dispatch:" in quality
+        assert "types: [opened, synchronize, reopened]" not in quality
+        assert "inputs.issue" in quality
+        assert "inputs.pull_request" in quality
+        assert "ai-dev issue-preflight" in quality
+        assert "AI_DEV_PROVIDER: claude" in quality
+        assert "ai-dev provider-preflight" not in quality
+        assert "provider-preflight.json" not in quality
+        assert quality.index("issue-preflight") < quality.index("ai-dev quality-gates")
+        assert "cancel-in-progress: true" in quality
+
+
+def test_formal_review_agents_are_single_turn_without_tools_or_network() -> None:
+    project_roots = [ROOT, ROOT / "src" / "ai_dev_platform" / "templates" / "project"]
+    for project_root in project_roots:
+        for filename in ("system-reviewer.yaml", "business-reviewer.yaml", "qa.yaml"):
+            definition = (project_root / ".ai-dev" / "agents" / filename).read_text(
+                encoding="utf-8"
+            )
+            assert "max_turns: 1" in definition
+            assert "available_tools: []" in definition
+            assert "readable_paths: []" in definition
+            assert "  mode: none" in definition
 
 
 def test_manual_claude_workflow_uses_approved_issue_preflight_without_self_attestation() -> None:

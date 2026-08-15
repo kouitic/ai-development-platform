@@ -9,6 +9,7 @@ from ai_dev_platform.security.github_context import (
     GitHubContextError,
     load_trusted_development_context,
     load_trusted_github_context,
+    load_trusted_quality_context,
 )
 
 
@@ -111,6 +112,93 @@ def test_required_environment_and_production_workflow_are_rejected(
     with pytest.raises(GitHubContextError):
         load_trusted_github_context(
             initialized_project, load_config(initialized_project).project.github
+        )
+
+
+def _quality_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    *,
+    issue: str = "12",
+    pull_request: str = "9",
+) -> None:
+    event_path = root / "quality-event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "inputs": {"issue": issue, "pull_request": pull_request},
+                "repository": {
+                    "full_name": "owner/private-repo",
+                    "private": True,
+                    "visibility": "private",
+                    "default_branch": "main",
+                },
+                "sender": {"login": "trusted-human"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    values = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REPOSITORY": "owner/private-repo",
+        "GITHUB_ACTOR": "trusted-human",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_WORKFLOW_REF": (
+            "owner/private-repo/.github/workflows/ai-quality-gates.yml@refs/heads/main"
+        ),
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_manual_quality_context_is_bound_to_actor_issue_pr_and_default_branch(
+    initialized_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _quality_environment(monkeypatch, initialized_project)
+    settings = load_config(initialized_project).project.github.model_copy(
+        update={"allowed_actors": ["trusted-human"]}
+    )
+
+    context = load_trusted_quality_context(
+        initialized_project,
+        settings,
+        issue_number=12,
+        pull_request_number=9,
+    )
+
+    assert context.issue_number == 12
+    assert context.pull_request_number == 9
+    assert context.actor == "trusted-human"
+    assert context.default_branch == "main"
+
+
+@pytest.mark.parametrize("unsafe", ["issue", "pull_request", "branch", "actor"])
+def test_manual_quality_context_rejects_mismatched_authority(
+    initialized_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe: str,
+) -> None:
+    _quality_environment(
+        monkeypatch,
+        initialized_project,
+        issue="13" if unsafe == "issue" else "12",
+        pull_request="10" if unsafe == "pull_request" else "9",
+    )
+    if unsafe == "branch":
+        monkeypatch.setenv("GITHUB_REF", "refs/heads/feature")
+    allowed_actors = [] if unsafe == "actor" else ["trusted-human"]
+    settings = load_config(initialized_project).project.github.model_copy(
+        update={"allowed_actors": allowed_actors}
+    )
+
+    with pytest.raises(GitHubContextError):
+        load_trusted_quality_context(
+            initialized_project,
+            settings,
+            issue_number=12,
+            pull_request_number=9,
         )
 
 

@@ -412,6 +412,38 @@ def test_traceability_collection_normalizes_agent_files_from_host_verification(
     )
 
 
+def test_traceability_collection_uses_remaining_budget_and_records_cost(
+    initialized_project: Path,
+) -> None:
+    loaded, store, task, verification = _prepared_traceability_task(initialized_project)
+    task = store.save_task(task.model_copy(update={"estimated_cost_usd": 9.75}))
+    result = _traceability_result(
+        reported_files=["src/app.py"],
+        implementation_reference="src/app.py",
+    ).model_copy(update={"estimated_cost_usd": 0.1, "turns": 1})
+    provider = MockAgentProvider(scripted_results=[result])
+
+    updated = asyncio.run(
+        _collect_host_validated_traceability(
+            loaded,
+            provider,
+            store,
+            initialized_project,
+            task,
+            verification,
+        )
+    )
+
+    assert provider.requests[0].max_budget_usd == pytest.approx(0.25)
+    assert updated.estimated_cost_usd == pytest.approx(9.85)
+    assert "verified_test_cases" not in provider.requests[0].context
+    assert provider.requests[0].context["verification_summary"]["test_case_count"] == 1
+    assert any(
+        event["action"] == "traceability_agent_completed"
+        for event in store.list_events(task.task_id)
+    )
+
+
 @pytest.mark.parametrize(
     "design_reference",
     [

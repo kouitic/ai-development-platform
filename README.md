@@ -46,7 +46,7 @@ mainマージと本番操作を行うAPIはMVPに含めていません。
 
 ## 実Claudeモード
 
-`AI_DEV_PROVIDER=claude`を選ぶと、`GITHUB_EVENT_PATH`の実payloadとActions contextからPrivate repository、非fork、同一head repository、許可branch、pull_request event、actor、統合Workflowを検証します。自己申告の`AI_DEV_MINIMAL_PERMISSIONS`等だけでは起動できません。統合Workflow YAMLにGitHub Environmentやproduction用途がないことも検査します。Claude SDKにはRead/Glob/Grep/Write/Editと必要なread-only Webだけを渡し、テスト、Git、PR、comment、Checkはホスト側サービスが担当します。
+`AI_DEV_PROVIDER=claude`を選ぶと、`GITHUB_EVENT_PATH`の実payloadとActions contextからPrivate repository、許可actor、main上の手動Workflow、入力Issue・PRを検証します。品質Workflowは対象PRがopen、同一repository、非fork、許可branch、default branch向けであることもホスト側で照合します。自己申告の`AI_DEV_MINIMAL_PERMISSIONS`等だけでは起動できません。統合Workflow YAMLにGitHub Environmentやproduction用途がないことも検査します。正式レビューAIにはホスト収集済みの差分・要件・検証要約だけを渡し、追加ツールとインターネットを許可しません。テスト、Git、PR、comment、Checkはホスト側サービスが担当します。
 
 ClaudeのStructured Outputsには小さな固定エンベロープだけを渡し、復号した結果をstage別の正式Schemaでホスト側が再検証します。外部APIのSchema制約に合わせて、ドメインの品質契約を緩和しません。詳細は[Agent Provider連携IF仕様](docs/provider-interface.md)を参照してください。
 
@@ -111,7 +111,7 @@ uv run ai-dev issue-approval-template --issue 1
 uv run ai-dev issue-preflight --issue 1
 ```
 
-`.ai-dev/project.yaml`のGitHub連携を有効にし、`allowed_actors`へ手動実行を許可する人間を設定したうえで、Actions画面からmainの`AI開発オーケストレーター`へIssue番号を入力します。Workflowは承認をブランチ作成前に再検証し、Claude開発、ホスト検証、Issueブランチへのcommit/push、PR作成まで進んで停止します。System Review、Business Review、QAは、そのPRイベントで起動する独立した`ai-quality-gates.yml`が担当します。
+`.ai-dev/project.yaml`のGitHub連携を有効にし、`allowed_actors`へ手動実行を許可する人間を設定したうえで、Actions画面からmainの`AI開発オーケストレーター`へIssue番号を入力します。Workflowは承認をブランチ作成前に再検証し、Claude開発、ホスト検証、Issueブランチへのcommit/push、PR作成まで進んで停止します。PRの通常CIが成功した後、人間がmainの`AI quality gates`へ承認済みIssue番号と対象PR番号を入力し、System Review、Business Review、QAを明示的に開始します。PR更新だけでは有料レビューを起動しません。
 
 両レビューとQAが完了し、人間承認待ちへ到達した後、証拠を確認した人間だけが次を実行します。
 
@@ -121,7 +121,7 @@ uv run ai-dev approve --issue 1 --stage human-approval --commit-sha <対象コ�
 
 この承認はGitHub正式記録の成功後にローカル監査へ記録しますが、mainのマージや本番操作は行いません。
 
-正式なrequired Check経路は`.github/workflows/ai-quality-gates.yml`です。Secret履歴検査後に4段階のProvider事前診断を行い、CI検証、System Review、Business Review、QAを同一Job・同一PR head SHAで順番に一度ずつ実行します。診断と各結果のJSONおよびSHA-256 digestは、安全な一時領域へ保存します。
+正式なrequired Check経路は`.github/workflows/ai-quality-gates.yml`です。手動入力と承認済みIssueを検証し、Secret履歴検査後にCI証拠、System Review、Business Review、QAを同一Job・同一PR head SHAで順番に一度ずつ実行します。通常実行では有料の`provider-preflight`を重複実行しません。各結果のJSONおよびSHA-256 digestは、安全な一時領域へ保存します。Developerのトレーサビリティ収集費用も同じタスク予算へ加算し、各Claude要求には残予算だけを渡します。
 
 ```powershell
 uv run ai-dev quality-gates --issue 1 --pr 2 --base-sha <PR base SHA> --head-sha <PR head SHA>

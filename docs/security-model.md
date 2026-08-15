@@ -18,7 +18,7 @@
 10. Secretは外部管理し、Job単位で最小限を渡す。
 11. データ分類に基づき保存・送信を拒否する。
 12. Issue、stage、commit SHA固定の人間承認を要求する。
-13. 実Claude起動は`GITHUB_EVENT_PATH`のPrivate・非fork PR payloadと統合Workflow実体を照合し、自己申告環境変数だけでは許可しない。
+13. 実Claude起動は`GITHUB_EVENT_PATH`のPrivate repository、許可actor、main上の手動Workflow、入力Issue・PRと統合Workflow実体を照合し、対象PRの非fork・許可branch・SHAはGitHub APIとホスト検証で固定する。自己申告環境変数だけでは許可しない。
 
 ## Secret
 
@@ -36,7 +36,7 @@ Web、Issue、PR、ソース内コメントは未信頼データであり、ツ�
 
 ## GitHub実行コンテキスト
 
-Claudeを伴う正式品質ゲートは、repository visibility、event type/action、PR番号、head repository、fork属性、head branch/SHA、actorをevent payloadから取得し、Actions環境値と一致する場合だけ許可する。開発実行は別契約とし、`workflow_dispatch`の入力Issue、sender、default branchをpayloadから取得し、許可actor、`GITHUB_REF`、`GITHUB_WORKFLOW_REF`、`GITHUB_SHA`との一致を要求する。正式Workflowは品質用`.github/workflows/ai-quality-gates.yml`と開発用`.github/workflows/ai-orchestrator.yml`へ目的別に限定し、jobの`environment`指定とproduction用途を拒否する。環境変数による安全性overrideは実Claudeには提供しない。
+Claudeを伴う正式品質ゲートは`workflow_dispatch`だけを許可し、repository visibility、入力Issue・PR、sender、default branchをevent payloadから取得して、許可actor、`GITHUB_REF`、`GITHUB_WORKFLOW_REF`との一致を要求する。対象PRのopen状態、head repository、fork属性、base/head branch、head/base SHA、Issueとの関連は、GitHub APIと品質CLIが有料処理前に検証する。開発実行は別契約とし、入力Issueと実行SHAも照合する。正式Workflowは品質用`.github/workflows/ai-quality-gates.yml`と開発用`.github/workflows/ai-orchestrator.yml`へ目的別に限定し、jobの`environment`指定とproduction用途を拒否する。環境変数による安全性overrideは実Claudeには提供しない。
 
 ## 外部Actionの固定方針
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from fnmatch import fnmatch
 from pathlib import Path
 
 from ai_dev_platform.application.ci_evidence import collect_required_ci_evidence
@@ -321,6 +322,12 @@ async def _collect_host_validated_traceability(
     )
     if not implementation_reference_candidates:
         raise ValueError("no unprotected implementation reference candidates were found")
+    remaining_budget = loaded.project.budget.per_task.stop_usd - task.estimated_cost_usd
+    if remaining_budget <= 0:
+        raise ValueError("per-task budget stop reached before traceability collection")
+    test_status_counts: dict[str, int] = {}
+    for test_case in verification.executed_test_cases:
+        test_status_counts[test_case.status] = test_status_counts.get(test_case.status, 0) + 1
     request = AgentRequest(
         agent_id=definition.id,
         prompt=(
@@ -341,9 +348,11 @@ async def _collect_host_validated_traceability(
             "commit_sha": task.commit_sha,
             "requirements": [item.model_dump(mode="json") for item in requirements.requirements],
             "changed_files": implementation_reference_candidates,
-            "verified_test_cases": [
-                item.model_dump(mode="json") for item in verification.executed_test_cases
-            ],
+            "verification_summary": {
+                "overall_status": verification.overall_status,
+                "test_case_count": len(verification.executed_test_cases),
+                "test_status_counts": test_status_counts,
+            },
             "reference_contract": {
                 "design_references": {
                     "required_format": (
@@ -365,7 +374,7 @@ async def _collect_host_validated_traceability(
         model=definition.model,
         max_turns=1,
         timeout_seconds=loaded.project.workflow.timeout_minutes * 60,
-        max_budget_usd=loaded.project.budget.per_task.stop_usd,
+        max_budget_usd=remaining_budget,
         allowed_tools=[],
         forbidden_tools=list(
             dict.fromkeys([*definition.forbidden_tools, "Read", "Glob", "Grep", "Write", "Edit"])
@@ -378,6 +387,32 @@ async def _collect_host_validated_traceability(
         output_schema=DeveloperResult.model_json_schema(),
     )
     provider_result = await provider.execute(request)
+    previous_cost = task.estimated_cost_usd
+    new_cost = previous_cost + (provider_result.estimated_cost_usd or 0)
+    task = store.save_task(task.model_copy(update={"estimated_cost_usd": new_cost}))
+    store.append_event(
+        task.task_id,
+        "developer",
+        "traceability_agent_completed",
+        provider_result.status.value,
+        {
+            "commit_sha": task.commit_sha,
+            "model": provider_result.model,
+            "turns": provider_result.turns,
+            "estimated_cost_usd": provider_result.estimated_cost_usd,
+        },
+    )
+    warning_limit = loaded.project.budget.per_task.warning_usd
+    if previous_cost < warning_limit <= new_cost:
+        store.append_event(
+            task.task_id,
+            "orchestrator",
+            "per_task_budget_warning_reached",
+            "warning",
+            {"estimated_cost_usd": new_cost, "warning_usd": warning_limit},
+        )
+    if new_cost >= loaded.project.budget.per_task.stop_usd:
+        raise ValueError("per-task budget stop reached during traceability collection")
     if provider_result.status != AgentRunStatus.SUCCESS:
         raise ValueError(_developer_traceability_failure_message(provider_result))
     developer_result = DeveloperResult.model_validate(provider_result.output)
@@ -444,6 +479,14 @@ def run_quality_gate(
     verification_policy = loaded.verification
     if verification_policy is None:
         raise ValueError("host verification policy is not configured")
+    pull_request = github.get_pull_request(pull_request_number)
+    if pull_request.base_branch != loaded.project.github.default_branch:
+        raise ValueError("Pull Request base branch is not the configured default branch")
+    if not any(
+        fnmatch(pull_request.head_branch, pattern)
+        for pattern in loaded.project.github.allowed_branch_patterns
+    ):
+        raise ValueError("Pull Request head branch is not allowlisted")
     if ci_check_results is None:
         ci_check_results = collect_required_ci_evidence(
             github,

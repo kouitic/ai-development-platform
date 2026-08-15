@@ -28,14 +28,14 @@ Secretや個人情報を含まない小さな変更IssueをIssue Formで作り�
 3. `ai-dev issue-approval-template --issue <番号>`の二つのコメントを人間が投稿し、`ai:approved`付与後に`issue-preflight`が成功することを確認する。Issue本文変更と後続の却下で失敗へ戻ることも確認する。
 4. Actions画面からmainの`AI開発オーケストレーター`を手動実行する。安全判定は`workflow_dispatch` payloadのPrivate repository、入力Issue、sender、default branchと、`GITHUB_REF`、`GITHUB_WORKFLOW_REF`、`GITHUB_SHA`の一致から導出され、自己申告フラグでは起動できないことを確認する。
 5. 許可外ファイル、`.env`読取り、shell、main push、force push、外部送信が拒否されることを確認する。拒否ログに入力値を残さない。
-6. Claudeによる変更後にLocalVerificationRunnerがpytest、ruff、mypy、Secret scan、依存脆弱性検査、プロジェクト必須検査を実行し、PASS後だけcommit、push、PRがこの順で作成されることを履歴で確認する。開発WorkflowはPR作成後に停止し、System Review以降がPR Workflowだけで起動することも確認する。Verification run ID、worktree digest、基準SHA、commit SHAを記録する。
+6. Claudeによる変更後にLocalVerificationRunnerがpytest、ruff、mypy、Secret scan、依存脆弱性検査、プロジェクト必須検査を実行し、PASS後だけcommit、push、PRがこの順で作成されることを履歴で確認する。開発WorkflowはPR作成後に停止し、System Review以降が、通常CI成功後に人間が承認済みIssue番号とPR番号を入力した手動品質Workflowだけで起動することも確認する。PR更新だけではClaudeが起動しないことを確認する。Verification run ID、worktree digest、基準SHA、commit SHAを記録する。
 7. 通常CIのPython 3.12/3.13 matrixがMock-only frozen install、import、pytest、ruff、mypy、Source Package検査に成功し、Claude extraのimport確認にも成功することを確認する。
 8. `github-actions-pinning.md`とWorkflowを照合し、全外部ActionがNode.js 24対応のレビュー済みfull commit SHAへ固定され、version tagが残っていないことを確認する。
 9. system reviewへIssue本文、受入条件、PR diff、変更ファイル、検査集計が渡ることを、安全な参照IDで確認する。
-10. Claudeの構造化出力が[Agent Provider連携IF仕様](provider-interface.md)の固定`result_json`エンベロープで受理され、復号後のstage別結果が正式Schemaのホスト検証を通過することを確認する。`provider_api_error_400`が発生した場合はAPI要求拒否として記録し、受信後の不一致は`invalid_structured_output_<detail>`で失敗境界を確認する。形式修復が発生した場合は、ツールなし・インターネットなし・1 turn・最大0.50 USD・1回だけであること、費用とturnが合算されること、候補本文がログとArtifactへ保存されないことを確認する。
+10. Claudeの構造化出力が[Agent Provider連携IF仕様](provider-interface.md)の固定`result_json`エンベロープで受理され、復号後のstage別結果が正式Schemaのホスト検証を通過することを確認する。`provider_api_error_400`が発生した場合はAPI要求拒否として記録し、受信後の不一致は`invalid_structured_output_<detail>`で失敗境界を確認する。形式修復が発生した場合は、ツールなし・インターネットなし・1 turn・最大0.10 USD・1回だけであること、費用とturnが合算されること、候補本文がログとArtifactへ保存されないことを確認する。
 11. major FindingでCheckがfailureとなり、Finding ID付きで実装へ戻ることを確認する。
 12. 修正後の再レビューPASSまでFindingが未解決一覧から消えないことを確認する。
-13. 統合`ai-quality-gates.yml`がSecret履歴検査後に4段階のProvider事前診断を行い、同一PR head SHAでSystem、Business、QAを一度ずつ順番に実行し、QAがtrusted verification、両レビュー、traceability、security scan、環境構成を統合することを確認する。事前診断を含む各JSON ArtifactとSHA-256も照合する。
+13. 統合`ai-quality-gates.yml`が手動入力、Issue承認、PRとの関連、許可actor・branch・SHAを有料処理前に検証し、同一PR head SHAでDeveloperトレーサビリティ収集、System、Business、QAを一度ずつ順番に実行することを確認する。通常実行で`provider-preflight`の2生成要求を重複させず、各要求がタスク残予算だけを受け取ること、正式レビューがツールなし・インターネットなし・1 turnであることも確認する。QAがtrusted verification、両レビュー、traceability、security scan、環境構成を統合し、各JSON ArtifactとSHA-256を照合する。
 14. QA条件付き合格が専用人間待ちとなり、最終承認を自動通過しないことを確認する。
 15. GitHub comment失敗、Check失敗、Secret検出をそれぞれ模擬し、工程が進まないことを確認する。
 

@@ -271,6 +271,9 @@ class WorkflowRunner:
             return self._move(task, WorkflowState.FAILED, exc.code)
         except Exception:
             return self._move(task, WorkflowState.FAILED, "context_collection_failed")
+        remaining_budget = self.config.budget.per_task.stop_usd - task.estimated_cost_usd
+        if remaining_budget <= 0:
+            return self._move(task, WorkflowState.BLOCKED, "per_task_budget_stop_reached")
         request = AgentRequest(
             agent_id=agent_id,
             prompt=(
@@ -282,7 +285,7 @@ class WorkflowRunner:
             model=definition.model,
             max_turns=min(definition.max_turns, self.config.workflow.max_agent_turns),
             timeout_seconds=self.config.workflow.timeout_minutes * 60,
-            max_budget_usd=self.config.budget.per_task.stop_usd,
+            max_budget_usd=remaining_budget,
             allowed_tools=definition.available_tools,
             forbidden_tools=definition.forbidden_tools,
             working_directory=str(self.context_builder.root),
@@ -299,7 +302,8 @@ class WorkflowRunner:
             provider_result = await self.provider.execute(request)
         except Exception:
             return self._move(task, WorkflowState.FAILED, "provider_exception_suppressed")
-        new_cost = task.estimated_cost_usd + (provider_result.estimated_cost_usd or 0)
+        previous_cost = task.estimated_cost_usd
+        new_cost = previous_cost + (provider_result.estimated_cost_usd or 0)
         task = task.model_copy(update={"estimated_cost_usd": new_cost})
         self.store.append_event(
             task.task_id,
@@ -313,6 +317,15 @@ class WorkflowRunner:
                 "estimated_cost_usd": provider_result.estimated_cost_usd,
             },
         )
+        warning_limit = self.config.budget.per_task.warning_usd
+        if previous_cost < warning_limit <= new_cost:
+            self.store.append_event(
+                task.task_id,
+                "orchestrator",
+                "per_task_budget_warning_reached",
+                "warning",
+                {"estimated_cost_usd": new_cost, "warning_usd": warning_limit},
+            )
         if new_cost >= self.config.budget.per_task.stop_usd:
             return self._move(task, WorkflowState.BLOCKED, "per_task_budget_stop_reached")
         if provider_result.status != AgentRunStatus.SUCCESS:

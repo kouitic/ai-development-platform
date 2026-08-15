@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,31 @@ class TaskContextBuilder:
                 values.append("[truncated]")
                 break
         return values
+
+    @staticmethod
+    def _verification_summary(verification: Any) -> dict[str, Any]:
+        """Keep trusted quality facts while omitting repetitive per-test payloads."""
+        status_counts = Counter(item.status for item in verification.executed_test_cases)
+        return {
+            "run_id": verification.run_id,
+            "worktree_digest": verification.worktree_digest,
+            "base_commit_sha": verification.base_commit_sha,
+            "commit_sha": verification.commit_sha,
+            "changed_files": verification.changed_files,
+            "commands": verification.commands,
+            "results": [item.model_dump(mode="json") for item in verification.results],
+            "overall_status": verification.overall_status,
+            "started_at": verification.started_at,
+            "finished_at": verification.finished_at,
+            "invalidated_reason": verification.invalidated_reason,
+            "test_case_count": len(verification.executed_test_cases),
+            "test_status_counts": dict(status_counts),
+            "non_passing_test_cases": [
+                item.model_dump(mode="json")
+                for item in verification.executed_test_cases
+                if item.status != "PASS"
+            ],
+        }
 
     def build(
         self,
@@ -217,6 +243,10 @@ class TaskContextBuilder:
             context.update(self._review_context(task, include_business=True))
         elif stage == WorkflowState.QA_ASSESSMENT:
             quality_evidence = task.evidence.model_dump(mode="json")
+            quality_evidence["trusted_verification_results"] = [
+                self._verification_summary(item)
+                for item in task.evidence.trusted_verification_results
+            ]
             quality_evidence["system_reviews"] = [
                 item.model_dump(mode="json")
                 for item in _unique_results(task.evidence.system_reviews)
@@ -284,7 +314,8 @@ class TaskContextBuilder:
             "design": self._safe_file("docs/architecture.md"),
             "traceability": [item.model_dump(mode="json") for item in task.evidence.traceability],
             "trusted_verification_results": [
-                item.model_dump(mode="json") for item in task.evidence.trusted_verification_results
+                self._verification_summary(item)
+                for item in task.evidence.trusted_verification_results
             ],
             "trusted_ci_results": [
                 item.model_dump(mode="json") for item in task.evidence.trusted_ci_results

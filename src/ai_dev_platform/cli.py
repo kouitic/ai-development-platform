@@ -878,7 +878,12 @@ def _quality_command(
     try:
         task = run_quality_gate(
             loaded,
-            create_provider(loaded.project, root=root),
+            create_provider(
+                loaded.project,
+                root=root,
+                issue_number=issue,
+                pull_request_number=pr,
+            ),
             store,
             gateway,
             root,
@@ -1127,7 +1132,12 @@ def quality_gates_command(
         )
         task = run_integrated_quality_gates(
             loaded,
-            create_provider(loaded.project, root=root),
+            create_provider(
+                loaded.project,
+                root=root,
+                issue_number=issue,
+                pull_request_number=pr,
+            ),
             _store(root),
             gateway,
             root,

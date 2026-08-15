@@ -41,7 +41,7 @@ AI変更後のホストVerification、Agent Tool縮小、統合Actions、レビ�
 
 ## 手動Workflow＋承認済みIssue経路
 
-実Claude開発用の`workflow_dispatch`を、承認済みIssue番号だけを入力する経路へ限定した。非公開repository、許可された人間actor、main上のWorkflow定義、入力Issue、実行SHAをGitHub payloadとActions contextの双方から照合する。要件と12件の環境構成は別々のSHA-256 digestに結び付けた人間コメントと`ai:approved`をブランチ作成前に検証する。開発Workflowはホスト検証後のcommit/push/PR作成で停止し、System Review、Business Review、QAはPRイベントの独立Workflowへ委譲する。
+実Claude開発用の`workflow_dispatch`を、承認済みIssue番号だけを入力する経路へ限定した。非公開repository、許可された人間actor、main上のWorkflow定義、入力Issue、実行SHAをGitHub payloadとActions contextの双方から照合する。要件と12件の環境構成は別々のSHA-256 digestに結び付けた人間コメントと`ai:approved`をブランチ作成前に検証する。開発Workflowはホスト検証後のcommit/push/PR作成で停止する。System Review、Business Review、QAもmain上の独立した`workflow_dispatch`とし、承認済みIssue番号とPR番号を人間が入力した場合だけ起動する。PR更新イベントによる自動課金と通常実行時の有料Provider事前診断は行わない。
 
 Source Packageは指定ディレクトリが`git rev-parse --show-toplevel`と一致することを要求し、pytestのrepository配下temp directoryを誤って有効なpackage rootとして扱わない。ローカル自動テストは実装済みだが、実Claude・実GitHub受入は受入repository準備後に実施する。
 

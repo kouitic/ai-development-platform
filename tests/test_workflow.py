@@ -330,3 +330,19 @@ def test_per_task_budget_hard_stop_blocks(initialized_project: Path) -> None:
     blocked = asyncio.run(runner.run(task.task_id))
     assert blocked.state == WorkflowState.BLOCKED
     assert blocked.estimated_cost_usd == 10
+
+
+def test_agent_request_is_limited_to_remaining_task_budget(initialized_project: Path) -> None:
+    runner, store, task, provider = setup_runner(initialized_project, issue=91)
+    task = store.save_task(
+        task.model_copy(
+            update={
+                "state": WorkflowState.REQUIREMENTS_ANALYSIS,
+                "estimated_cost_usd": 9.75,
+            }
+        )
+    )
+
+    asyncio.run(runner.run_one_stage(task.task_id, WorkflowState.REQUIREMENTS_ANALYSIS))
+
+    assert provider.requests[0].max_budget_usd == pytest.approx(0.25)

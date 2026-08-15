@@ -46,6 +46,19 @@ class TrustedDevelopmentContext:
     workflow_path: str
 
 
+@dataclass(frozen=True, slots=True)
+class TrustedQualityContext:
+    """Validated manual quality event bound to one approved Issue and PR."""
+
+    repository: str
+    actor: str
+    event_name: str
+    issue_number: int
+    pull_request_number: int
+    default_branch: str
+    workflow_path: str
+
+
 def _mapping(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise GitHubContextError(f"GitHub payload is missing {label}")
@@ -147,6 +160,73 @@ def load_trusted_github_context(
         head_repository=head_repository_name,
         head_branch=head_branch,
         head_sha=head_sha,
+        workflow_path=workflow_path,
+    )
+
+
+def load_trusted_quality_context(
+    root: Path,
+    settings: GitHubSettings,
+    *,
+    issue_number: int | None = None,
+    pull_request_number: int | None = None,
+) -> TrustedQualityContext:
+    """Authorize a manual quality run from immutable GitHub payload facts."""
+    if os.getenv("GITHUB_ACTIONS") != "true":
+        raise GitHubContextError("real Claude execution requires GitHub Actions")
+    payload = _read_event_payload()
+    event_name = os.getenv("GITHUB_EVENT_NAME", "")
+    if event_name != "workflow_dispatch":
+        raise GitHubContextError("quality Claude execution requires workflow_dispatch")
+
+    repository = _mapping(payload.get("repository"), "repository")
+    repository_name = str(repository.get("full_name", ""))
+    if repository.get("private") is not True or str(repository.get("visibility", "")) != "private":
+        raise GitHubContextError("real Claude execution requires a private repository")
+    if not repository_name or os.getenv("GITHUB_REPOSITORY") != repository_name:
+        raise GitHubContextError("repository context does not match the event payload")
+
+    inputs = _mapping(payload.get("inputs"), "workflow inputs")
+    try:
+        payload_issue = int(str(inputs.get("issue", "")))
+        payload_pull_request = int(str(inputs.get("pull_request", "")))
+    except ValueError as exc:
+        raise GitHubContextError("quality workflow inputs are invalid") from exc
+    if payload_issue < 1 or payload_pull_request < 1:
+        raise GitHubContextError("quality workflow inputs are invalid")
+    if issue_number is not None and payload_issue != issue_number:
+        raise GitHubContextError("workflow Issue input does not match the requested Issue")
+    if pull_request_number is not None and payload_pull_request != pull_request_number:
+        raise GitHubContextError(
+            "workflow Pull Request input does not match the requested Pull Request"
+        )
+
+    sender = _mapping(payload.get("sender"), "sender")
+    actor = str(sender.get("login", ""))
+    if not actor or os.getenv("GITHUB_ACTOR") != actor or actor.endswith("[bot]"):
+        raise GitHubContextError("workflow actor is absent, inconsistent, or automated")
+    if not settings.allowed_actors or actor not in settings.allowed_actors:
+        raise GitHubContextError("workflow actor is not allowlisted")
+
+    default_branch = str(repository.get("default_branch", settings.default_branch))
+    if not default_branch or default_branch != settings.default_branch:
+        raise GitHubContextError("configured default branch does not match the repository")
+    if os.getenv("GITHUB_REF") != f"refs/heads/{default_branch}":
+        raise GitHubContextError("manual quality review must run from the default branch")
+    workflow_path = _workflow_has_safe_context(
+        root.resolve(), ".github/workflows/ai-quality-gates.yml", purpose="quality"
+    )
+    workflow_ref = os.getenv("GITHUB_WORKFLOW_REF", "").replace("\\", "/")
+    if not workflow_ref.endswith(f"@refs/heads/{default_branch}"):
+        raise GitHubContextError("quality workflow definition must come from the default branch")
+
+    return TrustedQualityContext(
+        repository=repository_name,
+        actor=actor,
+        event_name=event_name,
+        issue_number=payload_issue,
+        pull_request_number=payload_pull_request,
+        default_branch=default_branch,
         workflow_path=workflow_path,
     )
 

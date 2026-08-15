@@ -317,7 +317,7 @@ def test_claude_provider_repairs_format_once_with_tightened_policy(
         assert options.kwargs["tools"] == []
         assert options.kwargs["allowed_tools"] == []
         assert options.kwargs["max_turns"] == 1
-        assert options.kwargs["max_budget_usd"] == 0.5
+        assert options.kwargs["max_budget_usd"] == 0.1
         assert options.kwargs["setting_sources"] == []
         network = options.kwargs["sandbox"]["network"]
         assert network["allowedDomains"] == []
@@ -875,7 +875,15 @@ def test_provider_factory_enforces_real_runtime_trust(
     monkeypatch.setenv("GITHUB_REF_NAME", "ai/issue-1-test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "configured-in-test-environment")
     real_config = config.model_copy(
-        update={"github": config.github.model_copy(update={"enabled": True, "gateway": "gh"})}
+        update={
+            "github": config.github.model_copy(
+                update={
+                    "enabled": True,
+                    "gateway": "gh",
+                    "allowed_actors": ["reviewer"],
+                }
+            )
+        }
     )
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(ValueError, match="GitHub Actions"):
@@ -885,40 +893,37 @@ def test_provider_factory_enforces_real_runtime_trust(
     event_path.write_text(
         json.dumps(
             {
-                "action": "synchronize",
-                "number": 1,
+                "inputs": {"issue": "1", "pull_request": "1"},
                 "repository": {
                     "full_name": "owner/private-repo",
                     "private": True,
                     "visibility": "private",
+                    "default_branch": "main",
                 },
                 "sender": {"login": "reviewer"},
-                "pull_request": {
-                    "number": 1,
-                    "head": {
-                        "ref": "ai/issue-1-test",
-                        "sha": "a" * 40,
-                        "repo": {
-                            "full_name": "owner/private-repo",
-                            "fork": False,
-                        },
-                    },
-                },
             }
         ),
         encoding="utf-8",
     )
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/private-repo")
-    monkeypatch.setenv("GITHUB_HEAD_REF", "ai/issue-1-test")
     monkeypatch.setenv("GITHUB_ACTOR", "reviewer")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
     monkeypatch.setenv(
         "GITHUB_WORKFLOW_REF",
-        "owner/private-repo/.github/workflows/ai-quality-gates.yml@refs/pull/1/merge",
+        "owner/private-repo/.github/workflows/ai-quality-gates.yml@refs/heads/main",
     )
-    assert isinstance(create_provider(real_config, root=initialized_project), ClaudeAgentProvider)
+    assert isinstance(
+        create_provider(
+            real_config,
+            root=initialized_project,
+            issue_number=1,
+            pull_request_number=1,
+        ),
+        ClaudeAgentProvider,
+    )
 
 
 def test_mock_provider_does_not_require_claude_sdk(

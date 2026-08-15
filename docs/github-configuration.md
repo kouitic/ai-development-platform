@@ -31,6 +31,10 @@ Repository settingsで、Pull Request必須、required status checks、conversat
 
 `.ai-dev/project.yaml`で`github.enabled: true`、`github.gateway: gh`、`github.allowed_actors`を明示します。`allowed_actors`を空にしたまま実Claude開発を起動することはできません。`ANTHROPIC_API_KEY`はRepository Secretへ登録し、Actions画面からmainの`AI開発オーケストレーター`へ承認済みIssue番号を入力します。Workflowのbranch選択をmain以外にした場合は拒否されます。
 
+## 手動品質Workflow
+
+通常CI成功後、Actions画面からmainの`AI quality gates`へ承認済みIssue番号と、そのIssueを`Closes #<number>`で関連付けたopen PR番号を入力します。許可actor、main上のWorkflow、同一repository・非fork PR、default branch、許可head branch、base/head SHAを有料処理前に検証します。PRの作成・更新だけではClaudeを起動せず、通常実行では有料のProvider事前診断も行いません。同じPRの品質Workflowが重複した場合は古い実行を取り消します。
+
 ## CODEOWNERS
 
 生成直後の`@replace-with-github-owner`を実在する利用者またはTeamへ変更してから保護を有効にします。`.github/`、`.ai-dev/`、業務ルール、レビュー基準、品質基準、期待結果には必須Ownerを設定します。

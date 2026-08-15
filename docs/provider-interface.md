@@ -56,7 +56,7 @@ Claude結果は次の順で処理する。
 
 エンベロープ違反、JSON復号失敗、配列やscalar、正式Schema違反は、応答本文を保持せずに失敗境界だけを`REJECTED / invalid_structured_output_<detail>`へ分類する。`detail`は`transport_envelope`、`result_json`、`result_shape`、`host_schema`のいずれかとする。SDKが`structured_output`を提供しない場合に限り、互換経路として本文中の単一JSON objectを読み取り、復号できない場合は`text_json`とするが、正式Schemaのホスト検証は省略しない。
 
-正式Schemaがある要求で、失敗した候補が空ではなく128,000文字以下、かつSDKが報告した消費額から残タスク予算を確認できる場合だけ、ホスト側で形式修復を1回実施できる。形式修復は元の要求と同じ全体timeout内で行い、同じモデル、ツールなし、インターネットなし、1 turn、残タスク予算以内かつ最大0.50 USDとする。元のAgent定義やtask contextは再送せず、候補を命令ではないデータとして分離し、意味を変えずにJSON形式とSchema適合だけを修復させる。候補はメモリ内だけで扱い、結果、監査ログ、Artifactへ保存しない。修復後も不一致なら`REJECTED / invalid_structured_output_repair_failed_<detail>`とし、再試行しない。
+正式Schemaがある要求で、失敗した候補が空ではなく32,000文字以下、かつSDKが報告した消費額から残タスク予算を確認できる場合だけ、ホスト側で形式修復を1回実施できる。形式修復は元の要求と同じ全体timeout内で行い、同じモデル、ツールなし、インターネットなし、1 turn、残タスク予算以内かつ最大0.10 USDとする。元のAgent定義やtask contextは再送せず、候補を命令ではないデータとして分離し、意味を変えずにJSON形式とSchema適合だけを修復させる。候補はメモリ内だけで扱い、結果、監査ログ、Artifactへ保存しない。修復後も不一致なら`REJECTED / invalid_structured_output_repair_failed_<detail>`とし、再試行しない。
 
 ## 5. Provider障害との区別
 
@@ -83,7 +83,7 @@ Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2
 
 ## 6. Provider事前診断
 
-統合品質WorkflowはSecret履歴検査の後、正式な品質ゲートより前に`provider-preflight`を実行する。API資格情報がない場合はMockとして`SKIPPED`とし、外部APIを呼び出さない。Claudeの場合は診断モデルを`claude-sonnet-4-6`へ固定し、次を順番に確認する。原則として失敗した時点で停止するが、Token Counting APIだけに適用されるWorkspace制約は生成APIの利用可否を示さないため、安全な警告として後続診断を継続する。
+`provider-preflight`はAPI資格情報、モデルまたはSDK経路を変更した際の明示的な診断コマンドとし、通常の統合品質Workflowでは実行しない。品質Workflow自体のDeveloperトレーサビリティ収集が最初の生成要求となるため、毎回2件の診断用生成を重複させない。診断を実施する場合、Claudeの診断モデルを`claude-sonnet-4-6`へ固定し、次を順番に確認する。原則として失敗した時点で停止するが、Token Counting APIだけに適用されるWorkspace制約は生成APIの利用可否を示さないため、安全な警告として後続診断を継続する。
 
 | 段階 | 確認対象 |
 |---|---|
@@ -104,7 +104,7 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - Developer、System Review、Business Review、QAの複雑な正式Schemaを`output_format`へ直接渡さない。
 - 有効な`result_json`を復号し、正式Schema一致時だけ成功する。
 - エンベロープ、不正JSON、object形状、正式Schema不一致、不正な正式Schemaを安全な固定コードで区別して拒否する。
-- 残予算を確認できる修復可能な不一致だけを、ツールなし・インターネットなし・1 turn・最大0.50 USDで1回修復し、turn数と費用を合算する。
+- 残予算を確認できる修復可能な不一致だけを、ツールなし・インターネットなし・1 turn・最大0.10 USDで1回修復し、turn数と費用を合算する。
 - 残予算なし、費用不明、空または上限超過候補では形式修復を行わず、修復失敗時も応答本文を結果へ含めない。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。

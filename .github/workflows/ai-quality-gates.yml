@@ -1,8 +1,16 @@
 name: AI quality gates
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "承認済みIssue番号"
+        required: true
+        type: string
+      pull_request:
+        description: "検証するPull Request番号"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,16 +19,40 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-quality-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  group: ai-quality-${{ github.repository }}-${{ inputs.pull_request }}
   cancel-in-progress: true
 
 jobs:
   ordered-quality-gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
+      - name: Resolve authorized Pull Request and Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          case "$ISSUE_NUMBER" in
+            ""|*[!0-9]*) echo "Issue番号が不正です。" >&2; exit 1 ;;
+          esac
+          case "$PR_NUMBER" in
+            ""|*[!0-9]*) echo "Pull Request番号が不正です。" >&2; exit 1 ;;
+          esac
+          test "$ISSUE_NUMBER" -ge 1
+          test "$PR_NUMBER" -ge 1
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isCrossRepository,headRefName,headRefOid,headRepository,baseRefOid,closingIssuesReferences)"
+          test "$(jq -r '.state' <<<"$pr_json")" = "OPEN"
+          test "$(jq -r '.isCrossRepository' <<<"$pr_json")" = "false"
+          test "$(jq -r '.headRepository.nameWithOwner // ""' <<<"$pr_json")" = "$GITHUB_REPOSITORY"
+          jq -e --argjson issue "$ISSUE_NUMBER" 'any(.closingIssuesReferences[]?; .number == $issue)' <<<"$pr_json" >/dev/null
+          echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+          echo "BASE_SHA=$(jq -r '.baseRefOid' <<<"$pr_json")" >> "$GITHUB_ENV"
+          echo "HEAD_SHA=$(jq -r '.headRefOid' <<<"$pr_json")" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1、Node.js 24対応
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0、Node.js 24対応
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0、Node.js 24対応
@@ -34,6 +66,11 @@ jobs:
         run: uv sync --frozen --extra dev --extra claude
       - name: Validate governed configuration
         run: uv run ai-dev validate
+      - name: Validate approved Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AI_DEV_GITHUB_GATEWAY: gh
+        run: uv run ai-dev issue-preflight --issue "$ISSUE_NUMBER"
       - name: Build formal source submission
         run: uv run ai-dev package-source --output .ai-dev/local/submission.zip
       - name: Inspect formal source submission
@@ -42,40 +79,24 @@ jobs:
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0、Node.js 24対応
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Provider interface preflight
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}
-          AI_DEV_GITHUB_GATEWAY: gh
-        run: >-
-          uv run ai-dev provider-preflight
-          --artifact .ai-dev/local/quality-artifacts/provider-preflight.json
-      - name: Resolve linked Issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          issue_number="$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '.closingIssuesReferences[0].number')"
-          test -n "$issue_number"
-          echo "ISSUE_NUMBER=$issue_number" >> "$GITHUB_ENV"
       - name: CI, System Review, Business Review, and QA
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AI_DEV_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude' || 'mock' }}
+          AI_DEV_PROVIDER: claude
           AI_DEV_GITHUB_GATEWAY: gh
         run: >-
           uv run ai-dev quality-gates
           --issue "$ISSUE_NUMBER"
-          --pr "${{ github.event.pull_request.number }}"
-          --base-sha "${{ github.event.pull_request.base.sha }}"
-          --head-sha "${{ github.event.pull_request.head.sha }}"
+          --pr "$PR_NUMBER"
+          --base-sha "$BASE_SHA"
+          --head-sha "$HEAD_SHA"
           --artifact-directory .ai-dev/local/quality-artifacts
       - name: Upload sanitized quality evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1、Node.js 24対応
         with:
-          name: ai-quality-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          name: ai-quality-${{ env.PR_NUMBER }}-${{ env.HEAD_SHA }}
           path: .ai-dev/local/quality-artifacts/
           if-no-files-found: warn
           retention-days: 7

@@ -19,23 +19,23 @@ system_prompt: >-
   指定JSON Schemaに一致する形で返してください。
 provider: project_default
 model: default
-max_turns: 20
-available_tools: [Read, Glob, Grep]
-forbidden_tools: [Write, Edit, WebRead]
-readable_paths: [docs/quality/**, docs/requirements/**, evaluation/cases/**]
+max_turns: 1
+available_tools: []
+forbidden_tools: [Read, Glob, Grep, WebRead, Write, Edit]
+readable_paths: []
 writable_paths: []
 protected_paths: [.github/**, .ai-dev/**, evaluation/expected/**]
 forbidden_commands: [env, printenv, git push, git merge, gh pr merge]
 read_only: true
 internet_access:
-  mode: allowlist
-  domains: [docs.python.org, docs.github.com]
+  mode: none
+  domains: []
   external_content_is_untrusted: true
   allow_download: false
   allow_form_submission: false
   allow_authentication: false
   allow_sensitive_data_transmission: false
-  citation_required: true
+  citation_required: false
 output_schema: .ai-dev/schemas/qa-assessment-result.schema.json
 review_criteria: [必須テスト, 必須レビュー, 要件追跡, 回帰, セキュリティ, 残存リスク]
 reference_materials: [docs/quality/**, evaluation/expected/**]

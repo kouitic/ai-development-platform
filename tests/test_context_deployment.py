@@ -15,6 +15,7 @@ from ai_dev_platform.config.loader import load_config
 from ai_dev_platform.domain.models import (
     Decision,
     EvidenceReference,
+    ExecutedTestCase,
     GitHubCheckRunEvidence,
     RequirementsResult,
     TaskEvidence,
@@ -126,6 +127,16 @@ def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
                 evidence_reference="verification:required",
             )
         ],
+        executed_test_cases=[
+            ExecutedTestCase(
+                id=f"tests/test_app.py::test_case_{index}",
+                node_id=f"tests/test_app.py::test_case_{index}",
+                file="tests/test_app.py",
+                status="PASS",
+                evidence_reference=f"junit:test_case_{index}",
+            )
+            for index in range(25)
+        ],
         overall_status=VerificationStatus.PASS,
         started_at=now,
         finished_at=now,
@@ -178,6 +189,10 @@ def test_review_context_uses_verified_local_range_when_github_diff_is_limited(
         "quality (3.13)",
     ]
     assert all(result["commit_sha"] == "a" * 40 for result in context["trusted_ci_results"])
+    verification_context = context["trusted_verification_results"][0]
+    assert verification_context["test_case_count"] == 25
+    assert verification_context["test_status_counts"] == {"PASS": 25}
+    assert "executed_test_cases" not in verification_context
 
 
 def test_secret_in_issue_is_rejected_before_agent_context(initialized_project: Path) -> None:

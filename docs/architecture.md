@@ -111,7 +111,7 @@ Python 3.12/3.13のCI証拠は、同じhead SHAに結び付いたGitHub Check Ru
 
 承認は`issue_number`、`stage`、`commit_sha`、`approver`、`approved_at`を持つ。要件承認はさらに、要件ID・種別・説明・受入条件・必須性を正規化したSHA-256 digestとGitHubコメント参照を`RequirementsApproval`へ保持する。手動開発Workflowは、12件の環境回答を正規化した別のSHA-256 digestと人間コメントも検証する。構造化Issueや`ai:approved`ラベルだけでは承認済みにせず、botではないGitHub投稿者による所定形式の両コメント、現在digest、ラベルがすべて一致する場合だけ有効とする。Issue変更、対象SHA変更、後続の却下で無効になる。曖昧な自然言語は承認レコードに変換しない。mainマージ、本番操作、ロールバックはCLIの情報提供対象にはできるが、自動実行経路はMVPに設けない。
 
-手動開発Workflowはこの承認をブランチ作成前に再構成し、同一の一時Runner内で要件・環境構成証拠をSQLiteへseedする。これにより、Issue本文などの詳細をSQLite ArtifactでRunner間転送しない。PR作成後は`PAUSED`で終了し、独立したPR品質Workflowがcommit SHA固定でレビューを開始する。
+手動開発Workflowはこの承認をブランチ作成前に再構成し、同一の一時Runner内で要件・環境構成証拠をSQLiteへseedする。これにより、Issue本文などの詳細をSQLite ArtifactでRunner間転送しない。PR作成後は`PAUSED`で終了する。通常CI成功後に人間が独立した品質Workflowへ承認済みIssue番号とPR番号を入力した場合だけ、commit SHA固定でレビューを開始する。PR更新イベントだけではClaudeを起動しない。
 
 ## 10.1 Review Coverage Policy
 

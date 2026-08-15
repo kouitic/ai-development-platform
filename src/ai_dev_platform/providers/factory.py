@@ -13,7 +13,7 @@ from ai_dev_platform.providers.claude import ClaudeAgentProvider
 from ai_dev_platform.providers.mock import MockAgentProvider
 from ai_dev_platform.security.github_context import (
     load_trusted_development_context,
-    load_trusted_github_context,
+    load_trusted_quality_context,
 )
 
 ProviderPurpose = Literal["quality", "development"]
@@ -25,6 +25,7 @@ def create_provider(
     root: Path | None = None,
     purpose: ProviderPurpose = "quality",
     issue_number: int | None = None,
+    pull_request_number: int | None = None,
 ) -> AgentProvider:
     """Create Mock freely, but authorize Claude only from a validated GitHub event."""
     selected = os.getenv("AI_DEV_PROVIDER", config.provider).lower()
@@ -36,6 +37,7 @@ def create_provider(
             root or Path.cwd(),
             purpose=purpose,
             issue_number=issue_number,
+            pull_request_number=pull_request_number,
         )
         return ClaudeAgentProvider()
     raise ValueError("unsupported provider; allowed values are mock and claude")
@@ -47,6 +49,7 @@ def _assert_claude_runtime_allowed(
     *,
     purpose: ProviderPurpose,
     issue_number: int | None,
+    pull_request_number: int | None,
 ) -> None:
     """Reject environment-only attestations and require a trusted GitHub payload."""
     try:
@@ -66,6 +69,11 @@ def _assert_claude_runtime_allowed(
             raise ValueError("Claude development execution requires an Issue number")
         load_trusted_development_context(root, config.github, issue_number=issue_number)
     else:
-        load_trusted_github_context(root, config.github)
+        load_trusted_quality_context(
+            root,
+            config.github,
+            issue_number=issue_number,
+            pull_request_number=pull_request_number,
+        )
     if config.budget.per_task.stop_usd <= 0 or config.budget.max_execution_minutes <= 0:
         raise ValueError("Claude execution requires a positive execution budget")
