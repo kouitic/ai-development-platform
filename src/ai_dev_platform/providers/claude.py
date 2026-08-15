@@ -83,24 +83,8 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _safe_direct_api_error_detail(raw_response: bytes) -> str:
-    """Classify a structured 400 response without retaining its provider message."""
-    if len(raw_response) > _PREFLIGHT_MAX_ERROR_BYTES:
-        return "invalid_request"
-    try:
-        decoded = json.loads(raw_response.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return "invalid_request"
-    if not isinstance(decoded, dict):
-        return "invalid_request"
-    error = decoded.get("error")
-    if not isinstance(error, dict) or error.get("type") != "invalid_request_error":
-        return "invalid_request"
-    message = error.get("message")
-    if not isinstance(message, str):
-        return "invalid_request"
-    normalized = message.casefold()[:4096]
-
+def _safe_invalid_request_detail(normalized: str) -> str:
+    """Map normalized provider text to an allowlisted diagnostic category."""
     if "credit balance" in normalized and any(
         term in normalized for term in ("too low", "insufficient", "purchase credit")
     ):
@@ -119,6 +103,8 @@ def _safe_direct_api_error_detail(raw_response: bytes) -> str:
         return "credentials_invalid"
     if any(term in normalized for term in ("max_tokens", "max tokens")):
         return "max_tokens_invalid"
+    if "prompt is too long" in normalized or "input tokens" in normalized:
+        return "input_too_large"
     if "model" in normalized:
         if any(
             term in normalized
@@ -137,9 +123,26 @@ def _safe_direct_api_error_detail(raw_response: bytes) -> str:
         term in normalized for term in ("messages", "message.", "content", "user message", "role")
     ):
         return "messages_invalid"
-    if "prompt is too long" in normalized or "input tokens" in normalized:
-        return "input_too_large"
     return "invalid_request"
+
+
+def _safe_direct_api_error_detail(raw_response: bytes) -> str:
+    """Classify a structured 400 response without retaining its provider message."""
+    if len(raw_response) > _PREFLIGHT_MAX_ERROR_BYTES:
+        return "invalid_request"
+    try:
+        decoded = json.loads(raw_response.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "invalid_request"
+    if not isinstance(decoded, dict):
+        return "invalid_request"
+    error = decoded.get("error")
+    if not isinstance(error, dict) or error.get("type") != "invalid_request_error":
+        return "invalid_request"
+    message = error.get("message")
+    if not isinstance(message, str):
+        return "invalid_request"
+    return _safe_invalid_request_detail(message.casefold()[:4096])
 
 
 def _safe_http_error_code(error: urllib.error.HTTPError) -> str:
@@ -257,7 +260,7 @@ def _safe_api_error_detail(errors: Any) -> str:
     """Classify a 400 response without exposing the provider's error text."""
     if not isinstance(errors, list):
         return "invalid_request"
-    normalized = "\n".join(item.casefold()[:4096] for item in errors if isinstance(item, str))
+    normalized = "\n".join(item.casefold() for item in errors if isinstance(item, str))[:4096]
     if not normalized:
         return "invalid_request"
 
@@ -292,7 +295,7 @@ def _safe_api_error_detail(errors: Any) -> str:
         term in normalized for term in unsupported_terms
     ):
         return "structured_output_unsupported"
-    return "invalid_request"
+    return _safe_invalid_request_detail(normalized)
 
 
 def _safe_provider_error_code(message: Any) -> str:

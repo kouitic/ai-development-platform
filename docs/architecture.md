@@ -6,7 +6,7 @@
 
 Git変更は、許可パスと保護パス確認、変更ファイル・diff digest取得、ホストVerification PASS、対象不変確認、commit、検証結果とcommit SHAの関連付け、作業ブランチpush、PR作成の順序を専用Gatewayが強制する。AI自己申告テストは`agent_reported_test_results`、ホスト証拠は`trusted_verification_results`として分離する。main push、force push、merge、reset hard、clean、PR mergeは公開APIに存在しないか実行時に拒否する。
 
-品質結果は要件、デプロイ、開発、システムレビュー、業務レビュー、QAの個別Schemaで検証し、SQLiteには安全な集計と参照IDだけを保存する。正式要件は`RequirementItem`のIDで管理する。Developer AIの設計・実装・test case対応は候補として受け取り、リポジトリ内の実在パス、保護パス承認、対象commitのファイル、JUnitに存在するPASS test caseをホスト側で検証してから`TraceabilityRecord`へ昇格する。Verification全体の成功から全要件の証拠を自動生成しない。各必須要件について設計参照、実装参照、各受入条件の実行済みPASS test、要件種別ごとの必須Reviewが揃わなければQAを起動しない。AI生成要件は`REQUIREMENTS_APPROVAL_REQUIRED`、QAの条件付き合格は`QA_CONDITIONAL_APPROVAL_REQUIRED`、未確定の環境構成は`DEPLOYMENT_CONFIGURATION_REQUIRED`で停止する。
+品質結果は要件、デプロイ、開発、システムレビュー、業務レビュー、QAの個別Schemaで検証し、SQLiteには安全な集計と参照IDだけを保存する。正式要件は`RequirementItem`のIDで管理する。Developer AIの設計・実装・test case対応は候補として受け取るが、トレーサビリティ収集はホスト検証済み候補だけを入力するツールなし・インターネットなし・1 turnの要求へ限定する。その結果をリポジトリ内の実在パス、保護パス承認、対象commitのファイル、JUnitに存在するPASS test caseでホスト側が検証してから`TraceabilityRecord`へ昇格する。Verification全体の成功から全要件の証拠を自動生成しない。各必須要件について設計参照、実装参照、各受入条件の実行済みPASS test、要件種別ごとの必須Reviewが揃わなければQAを起動しない。AI生成要件は`REQUIREMENTS_APPROVAL_REQUIRED`、QAの条件付き合格は`QA_CONDITIONAL_APPROVAL_REQUIRED`、未確定の環境構成は`DEPLOYMENT_CONFIGURATION_REQUIRED`で停止する。
 
 Claude Agent SDKにはtool permission callbackとsandbox設定を渡す。ファイルは実体パスへ正規化し、リポジトリ外、symlink回避、資格情報、未許可書込みを拒否する。SDKのshell toolは文字列契約であるため使用を拒否し、ホスト側の安全なGit・テストAPIへ分離する。Webはallowlistまたはread-only判定を通し、送信・認証・実行・機密データ送信を許可しない。
 

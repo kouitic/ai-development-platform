@@ -379,6 +379,46 @@ def test_claude_provider_classifies_api_error_without_details(
             "provider_api_error_400_structured_output_unsupported",
         ),
         (
+            ["Your credit balance is too low to access the API. sensitive detail"],
+            "provider_api_error_400_billing_credit_balance_low",
+        ),
+        (
+            ["Billing is unavailable until payment is completed. sensitive detail"],
+            "provider_api_error_400_billing_unavailable",
+        ),
+        (
+            ["The organization has been disabled. sensitive detail"],
+            "provider_api_error_400_organization_disabled",
+        ),
+        (
+            ["This operation is restricted by the workspace. sensitive detail"],
+            "provider_api_error_400_workspace_restriction",
+        ),
+        (
+            ["This model is unavailable in your region. sensitive detail"],
+            "provider_api_error_400_region_restriction",
+        ),
+        (
+            ["The API key is invalid. sensitive detail"],
+            "provider_api_error_400_credentials_invalid",
+        ),
+        (
+            ["max_tokens must be positive. sensitive detail"],
+            "provider_api_error_400_max_tokens_invalid",
+        ),
+        (
+            ["The prompt is too long for the selected model. sensitive detail"],
+            "provider_api_error_400_input_too_large",
+        ),
+        (
+            ["The selected model is not available. sensitive detail"],
+            "provider_api_error_400_model_unavailable",
+        ),
+        (
+            ["The messages content is invalid. sensitive detail"],
+            "provider_api_error_400_messages_invalid",
+        ),
+        (
             ["sensitive provider request detail"],
             "provider_api_error_400_invalid_request",
         ),

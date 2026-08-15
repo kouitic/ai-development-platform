@@ -33,6 +33,7 @@ from ai_dev_platform.domain.models import (
     DeveloperResult,
     EvidenceReference,
     GitHubCheckRunEvidence,
+    InternetAccess,
     IssueData,
     RequirementItem,
     RequirementsApproval,
@@ -362,18 +363,18 @@ async def _collect_host_validated_traceability(
             "traceability_collection_only": True,
         },
         model=definition.model,
-        max_turns=min(definition.max_turns, loaded.project.workflow.max_agent_turns),
+        max_turns=1,
         timeout_seconds=loaded.project.workflow.timeout_minutes * 60,
         max_budget_usd=loaded.project.budget.per_task.stop_usd,
-        allowed_tools=[
-            tool for tool in definition.available_tools if tool in {"Read", "Glob", "Grep"}
-        ],
-        forbidden_tools=list(dict.fromkeys([*definition.forbidden_tools, "Write", "Edit"])),
+        allowed_tools=[],
+        forbidden_tools=list(
+            dict.fromkeys([*definition.forbidden_tools, "Read", "Glob", "Grep", "Write", "Edit"])
+        ),
         working_directory=str(root.resolve()),
-        readable_paths=definition.readable_paths,
+        readable_paths=[],
         writable_paths=[],
         protected_paths=definition.protected_paths,
-        internet_access=definition.internet_access,
+        internet_access=InternetAccess(),
         output_schema=DeveloperResult.model_json_schema(),
     )
     provider_result = await provider.execute(request)

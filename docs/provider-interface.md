@@ -68,11 +68,13 @@ Claude結果は次の順で処理する。
 | `ERROR / provider_api_error_400_model_unsupported` | 選択モデルがStructured Outputsに対応していないと安全に分類できた | 実施済み |
 | `ERROR / provider_api_error_400_schema_rejected` | 転送Schemaのコンパイル・検証拒否と安全に分類できた | 実施済み |
 | `ERROR / provider_api_error_400_structured_output_unsupported` | Structured Outputsのパラメーター非対応と安全に分類できた | 実施済み |
+| `ERROR / provider_api_error_400_<environment_detail>` | 課金残高・課金状態・組織・Workspace・地域・資格情報のいずれかに安全に分類できた | 実施済み |
+| `ERROR / provider_api_error_400_<request_detail>` | `max_tokens`・モデル・message・入力長のいずれかに安全に分類できた | 実施済み |
 | `ERROR / provider_api_error_400_invalid_request` | 400だが安全な分類条件に一致しない | 実施済み |
 | `ERROR / provider_structured_output_retries_exhausted` | SDKが有効な構造化結果を生成できず再試行上限へ到達 | 実施済み |
 | `TIMEOUT / provider_timeout` | 設定時間内に完了しない | 実施済み |
 
-400の分類にはSDKの`api_error_status`、`subtype`、`errors`を使用するが、`errors`は固定語句との照合にだけ使用する。Providerの例外本文、応答本文、`errors`本文、Secret、未マスク入力を`AgentResult.summary`や通常ログへ含めない。
+400の分類にはSDKの`api_error_status`、`subtype`、`errors`を使用するが、`errors`は固定語句との照合にだけ使用する。`environment_detail`は`billing_credit_balance_low`、`billing_unavailable`、`organization_disabled`、`workspace_restriction`、`region_restriction`、`credentials_invalid`、`request_detail`は`max_tokens_invalid`、`model_unavailable`、`model_invalid`、`messages_invalid`、`input_too_large`のいずれかとする。直接APIとAgent SDKの正式要求で同じ分類語彙を使用する。Providerの例外本文、応答本文、`errors`本文、Secret、未マスク入力を`AgentResult.summary`や通常ログへ含めない。
 
 Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2.134へ固定する。この版に同梱されるClaude CLI 2.1.226を使用し、Structured Outputsの起動時Schema検証を備えるCLI 2.1.205以降を必須とする。
 
@@ -89,7 +91,7 @@ Claude optional extraは`claude-agent-sdk>=0.2.134,<0.3`とし、`uv.lock`で0.2
 
 `models_api`と`token_count_api`は有料生成を行わず30秒以下、`messages_api`は16 output token以下かつ30秒以下、`agent_sdk`は1 turn、90秒以下、最大0.05 USDとする。1回の診断で有料生成は最大2回である。直接APIはredirectを拒否し、API keyを固定のAnthropic origin以外へ転送しない。400応答は最大64KBの構造化JSONだけをメモリ内で一時解析し、課金残高、組織、Workspace、地域、資格情報、`max_tokens`、モデル、message、入力長に対応する固定コードへ分類して直ちに破棄する。診断中は応答本文を評価・保存しない。Artifactは対象commit SHA、段階ごとの`PASS / WARN / ERROR`、安全な固定エラーコードだけを含み、警告を含む完走は`PASS_WITH_WARNINGS`とする。隣接するSHA-256 digestで完全性を確認できるようにし、モデル一覧、Providerのエラー本文、応答本文、request ID、Prompt、Secret、費用明細は保存しない。
 
-`models_api`失敗は資格情報、HTTP status、固定モデルの利用権限を調査する。`token_count_api`の`provider_api_error_400_workspace_restriction`だけは`WARN`として記録し、`messages_api`へ進む。それ以外のToken Counting失敗はモデルとuser messageの入力形式を調査して停止する。`messages_api`が失敗した場合は、生成要求固有の`max_tokens`、課金、組織・Workspace制約を調査する。`messages_api`まで成功して`agent_sdk`だけが失敗する場合は、Agent SDKまたは同梱Claude CLIの要求組み立て・認証経路を調査する。4段階すべてが成功して正式要求だけが失敗する場合は、Structured Outputs、runtime controls、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。
+`models_api`失敗は資格情報、HTTP status、固定モデルの利用権限を調査する。`token_count_api`の`provider_api_error_400_workspace_restriction`だけは`WARN`として記録し、`messages_api`へ進む。それ以外のToken Counting失敗はモデルとuser messageの入力形式を調査して停止する。`messages_api`が失敗した場合は、生成要求固有の`max_tokens`、課金、組織・Workspace制約を調査する。`messages_api`まで成功して`agent_sdk`だけが失敗する場合は、Agent SDKまたは同梱Claude CLIの要求組み立て・認証経路を調査する。4段階すべてが成功して正式要求だけが失敗する場合は、安全な400分類コードを確認してStructured Outputs、runtime controls、正式Prompt、task context、Agent固有設定の差を次の調査対象とする。Developerのトレーサビリティ収集はホストが検証した候補だけを入力し、ツールなし・インターネットなし・1 turnで実行する。これにより、参照探索や追加turnを正式要求の変動要因へ含めない。
 
 ## 7. 変更時の契約試験
 
@@ -101,6 +103,8 @@ Claude IFを変更する場合は、少なくとも次を自動試験する。
 - 不正JSON、正式Schema不一致、不正な正式Schemaを区別して拒否する。
 - SDKのtimeout、HTTP error、Secret非表示の既存契約を維持する。
 - 400を安全な分類コードへ変換し、`errors`本文を結果・ログへ含めない。
+- 直接APIとAgent SDKの正式要求が、課金・組織・Workspace・資格情報・要求形式を同じ安全な分類語彙へ変換する。
+- Developerのトレーサビリティ収集が、ホスト検証済み候補だけを使うツールなし・インターネットなし・1 turnの要求である。
 - 事前診断が同じ固定モデルで直接APIとAgent SDKを比較し、許可されたToken CountingのWorkspace警告以外は最初の失敗で停止する。
 - Token CountingのWorkspace警告だけが後続診断を継続し、他の段階やエラーコードを警告へ変更できない。
 - Token Counting APIとMessages APIが同じモデル・user messageを使用する。

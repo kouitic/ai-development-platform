@@ -402,6 +402,14 @@ def test_traceability_collection_normalizes_agent_files_from_host_verification(
     assert reference_contract["test_case_ids"] == {
         "allowed_values": ["tests/test_mock.py::test_required_behavior"]
     }
+    assert traceability_request.max_turns == 1
+    assert traceability_request.allowed_tools == []
+    assert traceability_request.readable_paths == []
+    assert traceability_request.writable_paths == []
+    assert traceability_request.internet_access.mode == "none"
+    assert {"Read", "Glob", "Grep", "Write", "Edit"}.issubset(
+        set(traceability_request.forbidden_tools)
+    )
 
 
 @pytest.mark.parametrize(
